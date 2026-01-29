@@ -48,12 +48,12 @@ def analyze(events: list[dict]) -> dict:
         tool = ev.get("tool", "")
         event_type = ev.get("event", "")
 
-        if event_type in ("PreToolUse", "PostToolUse") and tool:
-            if event_type == "PreToolUse":
+        if event_type in ("PreToolUse", "PostToolUse", "ToolUse") and tool:
+            if event_type in ("PreToolUse", "ToolUse"):
                 tool_counts[tool] += 1
                 sequences.append(tool)
 
-            if event_type == "PostToolUse" and ev.get("error") is not None:
+            if event_type in ("PostToolUse", "ToolUse") and ev.get("error") is not None:
                 error_counts[tool] += 1
                 total_errors += 1
 
