@@ -1,0 +1,5 @@
+{
+  "name": "tool-time",
+  "description": "Collects tool usage events, detects patterns, and suggests CLAUDE.md improvements",
+  "version": "0.1.0"
+}
