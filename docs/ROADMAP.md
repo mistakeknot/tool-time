@@ -7,7 +7,8 @@ Passive event collection + suggest-only analysis. No MCP, no CLI, no config.
 - [x] Shell hook logging (PreToolUse, PostToolUse, SessionStart, SessionEnd)
 - [x] JSONL event store (`~/.claude/tool-time/events.jsonl`)
 - [x] Session-end Python analyzer (7-day window)
-- [x] Pattern detection: Edit-without-Read, error rates, Bash overuse
+- [x] Pattern detection: Edit-without-Read (file-level), error rates, Bash overuse
+- [x] User rejection filtering (separate from real tool errors)
 - [x] Suggestions written to `pending-suggestions.json` (not auto-applied)
 
 **Success criteria:** Suggestions are actually useful (validated via v0.1.1 backfill).
@@ -16,9 +17,10 @@ Passive event collection + suggest-only analysis. No MCP, no CLI, no config.
 
 Bootstrap analytics from existing session transcripts instead of waiting for hook data.
 
-- [ ] Claude Code transcript parser (`~/.claude/projects/<name>/<id>.jsonl`)
-- [ ] Codex CLI transcript parser (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`)
-- [ ] `backfill.py` — parse all historical transcripts from both tools, emit unified events to `events.jsonl`
+- [x] Claude Code transcript parser (`~/.claude/projects/<name>/<id>.jsonl`)
+- [x] Codex CLI transcript parser (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`)
+- [x] `backfill.py` — parse all historical transcripts from both tools, emit unified events to `events.jsonl`
+- [x] File path capture in both parsers (enables file-level pattern detection)
 - [ ] Run `optimize.py` against backfilled data to validate suggestions immediately
 - [ ] One-time script, not a persistent service
 

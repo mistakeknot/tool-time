@@ -12,7 +12,8 @@ from typing import Generator
 
 # Unified event schema (v1)
 # {"v":1, "id":"<session>-<seq>", "ts":"<iso8601>", "event":"ToolUse",
-#  "tool":"<name>", "project":"<cwd>", "error":null, "source":"claude-code"|"codex"}
+#  "tool":"<name>", "project":"<cwd>", "error":null,
+#  "source":"claude-code"|"codex", "file":null|"<path>"}
 
 
 def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
@@ -63,6 +64,8 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
                     seq += 1
                     tool_name = block.get("name", "")
                     tool_use_id = block.get("id", "")
+                    tool_input = block.get("input", {})
+                    file_path = tool_input.get("file_path") or tool_input.get("path") or None
                     pending_calls[tool_use_id] = {
                         "v": 1,
                         "id": f"{session_id}-{seq}",
@@ -72,6 +75,7 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
                         "project": cwd,
                         "error": None,
                         "source": "claude-code",
+                        "file": file_path,
                     }
 
         elif record_type == "user":
@@ -142,6 +146,13 @@ def parse_codex(session_path: Path) -> Generator[dict, None, None]:
             seq += 1
             tool_name = payload.get("name", "")
             call_id = payload.get("call_id", "")
+            # arguments is a JSON string in Codex transcripts
+            file_path = None
+            try:
+                args = json.loads(payload.get("arguments", "{}"))
+                file_path = args.get("file_path") or args.get("path") or None
+            except (json.JSONDecodeError, TypeError):
+                pass
             pending_calls[call_id] = {
                 "v": 1,
                 "id": f"{session_id}-{seq}",
@@ -151,6 +162,7 @@ def parse_codex(session_path: Path) -> Generator[dict, None, None]:
                 "project": cwd,
                 "error": None,
                 "source": "codex",
+                "file": file_path,
             }
 
         elif payload_type == "function_call_output":
