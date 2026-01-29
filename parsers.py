@@ -66,7 +66,8 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
                     tool_use_id = block.get("id", "")
                     tool_input = block.get("input", {})
                     file_path = tool_input.get("file_path") or tool_input.get("path") or None
-                    pending_calls[tool_use_id] = {
+                    skill_name = tool_input.get("skill") if tool_name == "Skill" else None
+                    event_dict = {
                         "v": 1,
                         "id": f"{session_id}-{seq}",
                         "ts": ts,
@@ -75,8 +76,12 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
                         "project": cwd,
                         "error": None,
                         "source": "claude-code",
-                        "file": file_path,
                     }
+                    if file_path:
+                        event_dict["file"] = file_path
+                    if skill_name:
+                        event_dict["skill"] = skill_name
+                    pending_calls[tool_use_id] = event_dict
 
         elif record_type == "user":
             for block in content:
@@ -148,12 +153,15 @@ def parse_codex(session_path: Path) -> Generator[dict, None, None]:
             call_id = payload.get("call_id", "")
             # arguments is a JSON string in Codex transcripts
             file_path = None
+            skill_name = None
             try:
                 args = json.loads(payload.get("arguments", "{}"))
                 file_path = args.get("file_path") or args.get("path") or None
+                if tool_name == "Skill":
+                    skill_name = args.get("skill")
             except (json.JSONDecodeError, TypeError):
                 pass
-            pending_calls[call_id] = {
+            event_dict = {
                 "v": 1,
                 "id": f"{session_id}-{seq}",
                 "ts": ts,
@@ -162,8 +170,12 @@ def parse_codex(session_path: Path) -> Generator[dict, None, None]:
                 "project": cwd,
                 "error": None,
                 "source": "codex",
-                "file": file_path,
             }
+            if file_path:
+                event_dict["file"] = file_path
+            if skill_name:
+                event_dict["skill"] = skill_name
+            pending_calls[call_id] = event_dict
 
         elif payload_type == "function_call_output":
             call_id = payload.get("call_id", "")

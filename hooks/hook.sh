@@ -13,11 +13,25 @@ mkdir -p "$DATA_DIR"
 # Read stdin once
 INPUT=$(cat)
 
-# Extract fields with jq
-EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // empty')
-TOOL=$(echo "$INPUT" | jq -r '.tool_name // empty')
-SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+# Extract all fields in a single jq call (newline-delimited for safe parsing)
+FIELDS=$(echo "$INPUT" | jq -r '
+  [
+    (.hook_event_name // ""),
+    (.tool_name // ""),
+    (.session_id // ""),
+    (.cwd // ""),
+    (.tool_input.skill // ""),
+    (.tool_input.file_path // .tool_input.path // "")
+  ] | .[]')
+
+# Read into array (preserves values with spaces)
+mapfile -t F <<< "$FIELDS"
+EVENT="${F[0]:-}"
+TOOL="${F[1]:-}"
+SESSION_ID="${F[2]:-}"
+CWD="${F[3]:-}"
+SKILL="${F[4]:-}"
+FILE_PATH="${F[5]:-}"
 
 # Sequence counter per session (atomic via file)
 SEQ_FILE="$DATA_DIR/.seq-${SESSION_ID}"
@@ -31,10 +45,8 @@ echo "$SEQ" > "$SEQ_FILE"
 # Extract error info for PostToolUse
 ERROR="null"
 if [ "$EVENT" = "PostToolUse" ]; then
-  # Check if tool_result contains an error indicator
   HAS_ERROR=$(echo "$INPUT" | jq -r 'if .tool_result and (.tool_result | tostring | test("error|Error|ERROR"; "g")) then "true" else "false" end')
   if [ "$HAS_ERROR" = "true" ]; then
-    # Sanitize: first 200 chars of result, no newlines
     ERROR=$(echo "$INPUT" | jq -r '.tool_result | tostring | gsub("\n"; " ") | .[0:200]')
     ERROR=$(echo "$ERROR" | jq -Rs '.')
   fi
@@ -44,7 +56,7 @@ fi
 TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 ID="${SESSION_ID}-${SEQ}"
 
-# Use jq to build valid JSON (handles escaping)
+# Build JSON — include skill and file only when non-empty
 LINE=$(jq -nc \
   --arg v "1" \
   --arg id "$ID" \
@@ -53,7 +65,11 @@ LINE=$(jq -nc \
   --arg tool "$TOOL" \
   --arg project "$CWD" \
   --argjson error "$ERROR" \
-  '{v:($v|tonumber), id:$id, ts:$ts, event:$event, tool:$tool, project:$project, error:$error}')
+  --arg skill "$SKILL" \
+  --arg file "$FILE_PATH" \
+  '{v:($v|tonumber), id:$id, ts:$ts, event:$event, tool:$tool, project:$project, error:$error}
+   + (if $skill != "" then {skill:$skill} else {} end)
+   + (if $file != "" then {file:$file} else {} end)')
 
 # Atomic single-line write (under PIPE_BUF)
 echo "$LINE" >> "$EVENTS_FILE"

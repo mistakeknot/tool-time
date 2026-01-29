@@ -52,10 +52,22 @@ def load_events(days: int = LOOKBACK_DAYS) -> list[dict]:
     return events
 
 
+def parse_mcp_server(tool_name: str) -> str | None:
+    """Extract MCP server name from tool name like 'mcp__server__tool'."""
+    if not tool_name.startswith("mcp__"):
+        return None
+    parts = tool_name.split("__")
+    if len(parts) >= 3:
+        return parts[1]
+    return None
+
+
 def analyze(events: list[dict]) -> dict:
     tool_counts: Counter = Counter()
     error_counts: Counter = Counter()
     rejection_counts: Counter = Counter()
+    mcp_server_counts: Counter = Counter()
+    skill_counts: Counter = Counter()
     total_errors = 0
     total_rejections = 0
 
@@ -73,6 +85,16 @@ def analyze(events: list[dict]) -> dict:
                 tool_counts[tool] += 1
                 file_path = ev.get("file")
                 file_ops.append((tool, file_path))
+
+                # Track MCP server usage
+                server = parse_mcp_server(tool)
+                if server:
+                    mcp_server_counts[server] += 1
+
+                # Track skill usage (tool="Skill", skill name in "skill" field)
+                if tool == "Skill":
+                    skill_name = ev.get("skill", "unknown")
+                    skill_counts[skill_name or "unknown"] += 1
 
             error = ev.get("error")
             if event_type in ("PostToolUse", "ToolUse") and error is not None:
@@ -103,6 +125,8 @@ def analyze(events: list[dict]) -> dict:
         "tool_counts": tool_counts,
         "error_counts": error_counts,
         "rejection_counts": rejection_counts,
+        "mcp_server_counts": mcp_server_counts,
+        "skill_counts": skill_counts,
         "total_errors": total_errors,
         "total_rejections": total_rejections,
         "total_calls": sum(tool_counts.values()),
@@ -171,6 +195,16 @@ def print_summary(stats: dict) -> None:
         print(f"tool-time: {stats['total_errors']} errors detected (excl. {stats['total_rejections']} user rejections)")
     if stats["edit_without_read"]:
         print(f"tool-time: {stats['edit_without_read']}x Edit-without-Read (file-level)")
+    if stats["mcp_server_counts"]:
+        mcp_summary = ", ".join(
+            f"{s}({c})" for s, c in stats["mcp_server_counts"].most_common(5)
+        )
+        print(f"tool-time: MCP servers: {mcp_summary}")
+    if stats["skill_counts"]:
+        skill_summary = ", ".join(
+            f"{s}({c})" for s, c in stats["skill_counts"].most_common(5)
+        )
+        print(f"tool-time: Skills: {skill_summary}")
 
 
 def main() -> None:
