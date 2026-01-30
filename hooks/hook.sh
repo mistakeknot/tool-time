@@ -77,5 +77,5 @@ echo "$LINE" >> "$EVENTS_FILE"
 # On SessionEnd, run optimize.py and clean up seq file
 if [ "$EVENT" = "SessionEnd" ]; then
   rm -f "$SEQ_FILE"
-  python3 "$PLUGIN_ROOT/optimize.py" 2>/dev/null || true
+  python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null || true
 fi
