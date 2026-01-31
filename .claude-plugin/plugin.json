@@ -1,5 +1,17 @@
 {
   "name": "tool-time",
-  "description": "Collects tool usage events, detects patterns, and suggests CLAUDE.md improvements",
-  "version": "0.1.0"
+  "version": "0.2.0",
+  "description": "Tool usage analytics for Claude Code. Tracks tool patterns via hooks, detects inefficiencies, and offers community comparison with anonymized data.",
+  "author": {
+    "name": "mistakeknot"
+  },
+  "repository": "https://github.com/mistakeknot/tool-time",
+  "license": "MIT",
+  "keywords": [
+    "tools",
+    "analytics",
+    "usage",
+    "hooks",
+    "community"
+  ]
 }
