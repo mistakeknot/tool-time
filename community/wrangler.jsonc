@@ -6,13 +6,7 @@
     {
       "binding": "DB",
       "database_name": "tool-time",
-      "database_id": "TODO-create-with-wrangler-d1-create"
-    }
-  ],
-  "routes": [
-    {
-      "pattern": "tool-time-api.workers.dev/*",
-      "zone_name": ""
+      "database_id": "7360c5cb-0199-4570-a9b0-c71ab83fb474"
     }
   ]
 }

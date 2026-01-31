@@ -18,7 +18,7 @@ from urllib.error import URLError
 DATA_DIR = Path.home() / ".claude" / "tool-time"
 STATS_FILE = DATA_DIR / "stats.json"
 CONFIG_FILE = DATA_DIR / "config.json"
-API_ENDPOINT = "https://tool-time-api.workers.dev/v1/api/submit"
+API_ENDPOINT = "https://tool-time-api.mistakeknot.workers.dev/v1/api/submit"
 
 
 def load_config() -> dict:

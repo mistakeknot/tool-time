@@ -54,7 +54,7 @@ If the data looks healthy, say so briefly and stop. Don't invent problems.
 
 Check `~/.claude/tool-time/config.json` — if `community_sharing` is true, also compare local stats to community baselines:
 
-1. Fetch `https://tool-time-api.workers.dev/v1/api/stats`
+1. Fetch `https://tool-time-api.mistakeknot.workers.dev/v1/api/stats`
 2. Compare local error rates to community averages
 3. Flag tools where local error rate is >2x the community average
 4. Note tools the community uses heavily that the user doesn't use at all
