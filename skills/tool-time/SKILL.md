@@ -58,3 +58,33 @@ Check `~/.claude/tool-time/config.json` — if `community_sharing` is true, also
 2. Compare local error rates to community averages
 3. Flag tools where local error rate is >2x the community average
 4. Note tools the community uses heavily that the user doesn't use at all
+
+## Skill Recommendations
+
+After analysis, suggest relevant skills from the playbooks.com directory:
+
+1. Detect the project's primary language by checking for:
+   - `package.json` or `tsconfig.json` → TypeScript/JavaScript
+   - `pyproject.toml`, `setup.py`, or `requirements.txt` → Python
+   - `Gemfile` or `*.gemspec` → Ruby
+   - `go.mod` → Go
+   - `Cargo.toml` → Rust
+   - `*.swift` or `Package.swift` → Swift
+
+2. Build 1-2 search queries combining the language with patterns from the data:
+   - If error rates are high → search for "testing" or "debugging" skills
+   - If no test runner usage detected → search for testing skills in that language
+   - If heavy web/API usage → search for relevant API/fetch skills
+   - Default: search for the primary language name
+
+3. Fetch from the API:
+   `https://playbooks.com/api/skills?search=<query>&limit=5`
+
+4. Filter results to only show skills that are relevant to the project (use judgment — skip generic or unrelated results).
+
+5. Present as a short list:
+   - Skill name and one-line description
+   - Install: `playbooks.com/skills/<repoOwner>/<repoName>/<skillSlug>`
+   - Why it's relevant based on the user's data
+
+If no relevant skills are found, skip this section entirely. Don't force recommendations.
