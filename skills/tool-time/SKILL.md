@@ -30,7 +30,7 @@ Look for these signals (not an exhaustive list — use your judgment):
 - **Tools with error rates above ~10%** — what's failing and why?
 - **Tools with high rejection rates** — the agent is doing something the user doesn't want
 - **Edit-without-read > 0** — the agent is editing files it hasn't read, leading to blind edits
-- **Bash dominance (>50% of calls)** — may indicate the agent should use Read, Edit, Grep instead
+- **Bash dominance (>50% of calls)** — but only a concern if the Bash calls are doing file reads/searches (cat, grep, find, head, tail) that dedicated tools handle better. Bash calls for git, test runners, script execution, and deployment are legitimate and should not be flagged.
 - **Low tool diversity** — are available tools being underutilized?
 
 Then read the project's CLAUDE.md (if it exists):
