@@ -49,3 +49,12 @@ Present findings as a short bulleted list. For each finding:
 Then offer to apply fixes. Use Edit to update CLAUDE.md or AGENTS.md directly, with user approval. Don't just suggest — propose the exact text.
 
 If the data looks healthy, say so briefly and stop. Don't invent problems.
+
+## Community Comparison (if enabled)
+
+Check `~/.claude/tool-time/config.json` — if `community_sharing` is true, also compare local stats to community baselines:
+
+1. Fetch `https://tool-time-api.workers.dev/v1/api/stats`
+2. Compare local error rates to community averages
+3. Flag tools where local error rate is >2x the community average
+4. Note tools the community uses heavily that the user doesn't use at all
