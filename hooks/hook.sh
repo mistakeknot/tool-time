@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tool-time event logger
 # Reads hook JSON from stdin, appends one JSONL line to events.jsonl
-# On SessionEnd, also invokes optimize.py
+# On SessionEnd, runs summarize.py then upload.py (background)
 set -euo pipefail
 
 DATA_DIR="$HOME/.claude/tool-time"
@@ -21,7 +21,8 @@ FIELDS=$(echo "$INPUT" | jq -r '
     (.session_id // ""),
     (.cwd // ""),
     (.tool_input.skill // ""),
-    (.tool_input.file_path // .tool_input.path // "")
+    (.tool_input.file_path // .tool_input.path // ""),
+    (.model // "")
   ] | .[]')
 
 # Read into array (preserves values with spaces)
@@ -32,6 +33,7 @@ SESSION_ID="${F[2]:-}"
 CWD="${F[3]:-}"
 SKILL="${F[4]:-}"
 FILE_PATH="${F[5]:-}"
+MODEL="${F[6]:-}"
 
 # Sequence counter per session (atomic via file)
 SEQ_FILE="$DATA_DIR/.seq-${SESSION_ID}"
@@ -67,9 +69,11 @@ LINE=$(jq -nc \
   --argjson error "$ERROR" \
   --arg skill "$SKILL" \
   --arg file "$FILE_PATH" \
+  --arg model "$MODEL" \
   '{v:($v|tonumber), id:$id, ts:$ts, event:$event, tool:$tool, project:$project, error:$error}
    + (if $skill != "" then {skill:$skill} else {} end)
-   + (if $file != "" then {file:$file} else {} end)')
+   + (if $file != "" then {file:$file} else {} end)
+   + (if $model != "" then {model:$model} else {} end)')
 
 # Atomic single-line write (under PIPE_BUF)
 echo "$LINE" >> "$EVENTS_FILE"
@@ -77,5 +81,7 @@ echo "$LINE" >> "$EVENTS_FILE"
 # On SessionEnd, run optimize.py and clean up seq file
 if [ "$EVENT" = "SessionEnd" ]; then
   rm -f "$SEQ_FILE"
-  python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null || true
+  if python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null; then
+    python3 "$PLUGIN_ROOT/upload.py" </dev/null >/dev/null 2>&1 &
+  fi
 fi

@@ -67,6 +67,7 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
     tool_counts: Counter[str] = Counter()
     tool_errors: Counter[str] = Counter()
     tool_rejections: Counter[str] = Counter()
+    model_counts: Counter[str] = Counter()
 
     # Group file ops by session for edit-without-read detection
     session_file_ops: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
@@ -76,6 +77,9 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
         event_type = ev.get("event", "")
         if not tool:
             continue
+        model = ev.get("model")
+        if model:
+            model_counts[model] += 1
 
         # Count calls from PreToolUse or ToolUse events
         if event_type in ("PreToolUse", "ToolUse"):
@@ -115,11 +119,15 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
             "rejections": tool_rejections.get(tool, 0),
         }
 
+    # Most common model, or null
+    model = model_counts.most_common(1)[0][0] if model_counts else None
+
     return {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "total_events": len(events),
         "tools": tools,
         "edit_without_read_count": edit_without_read_count,
+        "model": model,
     }
 
 
