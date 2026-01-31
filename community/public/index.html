@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>tool-time Community Analytics</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>tool-time Community Analytics</h1>
+    <p id="subtitle">Anonymized tool usage across Claude Code users</p>
+  </header>
+  <main>
+    <section id="overview">
+      <div class="stat-card">
+        <span class="stat-value" id="total-submissions">—</span>
+        <span class="stat-label">Submissions (7d)</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-value" id="unique-submitters">—</span>
+        <span class="stat-label">Unique Submitters</span>
+      </div>
+    </section>
+    <section id="charts">
+      <div class="chart-container">
+        <h2>Top Tools by Usage</h2>
+        <canvas id="tools-chart"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2>Error Rate by Tool</h2>
+        <canvas id="errors-chart"></canvas>
+      </div>
+      <div class="chart-container">
+        <h2>Model Distribution</h2>
+        <canvas id="models-chart"></canvas>
+      </div>
+    </section>
+    <footer>
+      <p>Data is anonymized and aggregated. Tools with fewer than 10 unique submitters are hidden.</p>
+      <p><a href="https://github.com/mistakeknot/tool-time">tool-time on GitHub</a></p>
+    </footer>
+  </main>
+  <script src="dashboard.js"></script>
+</body>
+</html>
