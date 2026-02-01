@@ -13,11 +13,19 @@ app.use("/v1/*", cors());
 // --- Validation ---
 
 const TOOL_NAME_RE = /^[a-zA-Z0-9_.\-:]+$/;
+const SKILL_NAME_RE = /^[a-zA-Z0-9_.\-:]+$/;
+const MCP_SERVER_NAME_RE = /^[a-zA-Z0-9_.\-:]+$/;
+const PLUGIN_NAME_RE = /^[a-zA-Z0-9_.\-:/@]+$/;
 
 const ToolStatsSchema = z.object({
   calls: z.number().int().min(0).max(100000),
   errors: z.number().int().min(0).max(100000),
   rejections: z.number().int().min(0).max(100000),
+});
+
+const McpServerStatsSchema = z.object({
+  calls: z.number().int().min(0).max(100000),
+  errors: z.number().int().min(0).max(100000),
 });
 
 const SubmitSchema = z.object({
@@ -27,6 +35,17 @@ const SubmitSchema = z.object({
   tools: z.record(z.string().regex(TOOL_NAME_RE), ToolStatsSchema),
   edit_without_read: z.number().int().min(0).max(100000),
   model: z.string().max(100).nullable().optional(),
+  skills: z.record(
+    z.string().regex(SKILL_NAME_RE).max(100),
+    z.number().int().min(0).max(100000)
+  ).optional(),
+  mcp_servers: z.record(
+    z.string().regex(MCP_SERVER_NAME_RE).max(100),
+    McpServerStatsSchema
+  ).optional(),
+  installed_plugins: z.array(z.string().regex(PLUGIN_NAME_RE).max(100))
+    .max(100)
+    .optional(),
 });
 
 // --- Routes ---
@@ -86,19 +105,65 @@ app.post("/v1/api/submit", async (c) => {
       return c.json({ error: "Insert failed" }, 500);
     }
 
-    // Insert tool stats
-    const stmts = Object.entries(data.tools).map(([name, stats]) =>
-      c.env.DB.prepare(
-        "INSERT INTO tool_stats (submission_id, tool_name, calls, errors, rejections) VALUES (?, ?, ?, ?, ?)"
-      ).bind(row.id, name, stats.calls, stats.errors, stats.rejections)
-    );
+    // Build all insert statements for a single atomic batch
+    const allStmts: D1PreparedStatement[] = [];
 
-    if (stmts.length > 0) {
-      await c.env.DB.batch(stmts);
+    // Tool stats
+    for (const [name, stats] of Object.entries(data.tools)) {
+      allStmts.push(
+        c.env.DB.prepare(
+          "INSERT INTO tool_stats (submission_id, tool_name, calls, errors, rejections) VALUES (?, ?, ?, ?, ?)"
+        ).bind(row.id, name, stats.calls, stats.errors, stats.rejections)
+      );
+    }
+
+    // Skill stats
+    if (data.skills) {
+      for (const [name, calls] of Object.entries(data.skills)) {
+        allStmts.push(
+          c.env.DB.prepare(
+            "INSERT INTO skill_stats (submission_id, name, calls) VALUES (?, ?, ?)"
+          ).bind(row.id, name, calls)
+        );
+      }
+    }
+
+    // MCP server stats
+    if (data.mcp_servers) {
+      for (const [name, stats] of Object.entries(data.mcp_servers)) {
+        allStmts.push(
+          c.env.DB.prepare(
+            "INSERT INTO mcp_server_stats (submission_id, name, calls, errors) VALUES (?, ?, ?, ?)"
+          ).bind(row.id, name, stats.calls, stats.errors)
+        );
+      }
+    }
+
+    // Plugins → aggregate table (no per-submission linkage for privacy)
+    if (data.installed_plugins) {
+      for (const plugin of data.installed_plugins) {
+        allStmts.push(
+          c.env.DB.prepare(
+            `INSERT INTO plugin_usage_aggregate (plugin_name, install_count, last_seen)
+             VALUES (?, 1, datetime('now'))
+             ON CONFLICT(plugin_name) DO UPDATE SET
+               install_count = install_count + 1,
+               last_seen = datetime('now')`
+          ).bind(plugin)
+        );
+      }
+    }
+
+    if (allStmts.length > 0) {
+      await c.env.DB.batch(allStmts);
     }
 
     return c.json({ status: "ok" }, 200);
-  } catch (e: any) {
+  } catch (e: unknown) {
+    console.error("POST /v1/api/submit failed:", e);
+    if (e instanceof Error && e.message.includes("UNIQUE constraint")) {
+      return c.json({ error: "Duplicate submission" }, 409);
+    }
     return c.json({ error: "Server error" }, 500);
   }
 });
@@ -139,10 +204,50 @@ app.get("/v1/api/stats", async (c) => {
      ORDER BY count DESC`
   ).all();
 
+  const skills = await c.env.DB.prepare(
+    `SELECT ss.name,
+            SUM(ss.calls) as total_calls,
+            COUNT(DISTINCT s.submission_token) as unique_submitters
+     FROM skill_stats ss
+     JOIN submissions s ON s.id = ss.submission_id
+     WHERE s.submitted_at >= datetime('now', '-7 days')
+     GROUP BY ss.name
+     HAVING COUNT(DISTINCT s.submission_token) >= 10
+     ORDER BY total_calls DESC
+     LIMIT 50`
+  ).all();
+
+  const mcpServers = await c.env.DB.prepare(
+    `SELECT ms.name,
+            SUM(ms.calls) as total_calls,
+            SUM(ms.errors) as total_errors,
+            COUNT(DISTINCT s.submission_token) as unique_submitters
+     FROM mcp_server_stats ms
+     JOIN submissions s ON s.id = ms.submission_id
+     WHERE s.submitted_at >= datetime('now', '-7 days')
+     GROUP BY ms.name
+     HAVING COUNT(DISTINCT s.submission_token) >= 10
+     ORDER BY total_calls DESC
+     LIMIT 50`
+  ).all();
+
+  const plugins = await c.env.DB.prepare(
+    `SELECT plugin_name, install_count
+     FROM plugin_usage_aggregate
+     WHERE install_count >= 10
+     ORDER BY install_count DESC
+     LIMIT 50`
+  ).all();
+
   return c.json({
     overview: overview ?? {},
     tools: tools.results ?? [],
     models: models.results ?? [],
+    dimensions: {
+      skills: skills.results ?? [],
+      mcp_servers: mcpServers.results ?? [],
+      plugins: plugins.results ?? [],
+    },
   });
 });
 

@@ -54,6 +54,9 @@ def anonymize(stats: dict, token: str) -> dict:
     - tools: {name: {calls, errors, rejections}} (names are public)
     - edit_without_read (count)
     - model (public model name)
+    - skills: {name: calls} (public skill identifiers)
+    - mcp_servers: {name: {calls, errors}} (parsed from tool name prefix)
+    - installed_plugins: [name, ...] (public plugin identifiers)
 
     Everything else is stripped: file paths, project names, error messages,
     skill arguments.
@@ -77,6 +80,15 @@ def anonymize(stats: dict, token: str) -> dict:
         },
         "edit_without_read": stats.get("edit_without_read_count", 0),
         "model": stats.get("model"),
+        "skills": {
+            name: s.get("calls", 0)
+            for name, s in stats.get("skills", {}).items()
+        },
+        "mcp_servers": {
+            name: {"calls": m.get("calls", 0), "errors": m.get("errors", 0)}
+            for name, m in stats.get("mcp_servers", {}).items()
+        },
+        "installed_plugins": stats.get("installed_plugins", []),
     }
 
 

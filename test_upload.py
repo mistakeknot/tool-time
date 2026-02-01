@@ -19,6 +19,17 @@ SAMPLE_STATS = {
     },
     "edit_without_read_count": 2,
     "model": "claude-opus-4-5-20251101",
+    "skills": {
+        "superpowers:brainstorming": {"calls": 5},
+        "tool-time:tool-time": {"calls": 2},
+    },
+    "mcp_servers": {
+        "chrome-devtools": {"calls": 15, "errors": 2},
+    },
+    "installed_plugins": [
+        "superpowers@superpowers-marketplace",
+        "tool-time@interagency-marketplace",
+    ],
 }
 
 
@@ -34,6 +45,9 @@ class TestAnonymize:
             "tools",
             "edit_without_read",
             "model",
+            "skills",
+            "mcp_servers",
+            "installed_plugins",
         }
 
     def test_truncates_timestamp_to_hour(self):
@@ -146,3 +160,46 @@ class TestMain:
             # last_upload_at should NOT be set on failure
             saved = json.loads(config_file.read_text())
             assert "last_upload_at" not in saved
+
+
+class TestAnonymizeEcosystemFields:
+    def test_skills_in_payload(self):
+        result = anonymize(SAMPLE_STATS, "tok")
+        assert result["skills"] == {
+            "superpowers:brainstorming": 5,
+            "tool-time:tool-time": 2,
+        }
+
+    def test_mcp_servers_in_payload(self):
+        result = anonymize(SAMPLE_STATS, "tok")
+        assert result["mcp_servers"] == {
+            "chrome-devtools": {"calls": 15, "errors": 2},
+        }
+
+    def test_installed_plugins_in_payload(self):
+        result = anonymize(SAMPLE_STATS, "tok")
+        assert result["installed_plugins"] == [
+            "superpowers@superpowers-marketplace",
+            "tool-time@interagency-marketplace",
+        ]
+
+    def test_missing_skills_defaults_empty(self):
+        stats = {k: v for k, v in SAMPLE_STATS.items() if k != "skills"}
+        result = anonymize(stats, "tok")
+        assert result["skills"] == {}
+
+    def test_missing_mcp_servers_defaults_empty(self):
+        stats = {k: v for k, v in SAMPLE_STATS.items() if k != "mcp_servers"}
+        result = anonymize(stats, "tok")
+        assert result["mcp_servers"] == {}
+
+    def test_missing_plugins_defaults_empty(self):
+        stats = {k: v for k, v in SAMPLE_STATS.items() if k != "installed_plugins"}
+        result = anonymize(stats, "tok")
+        assert result["installed_plugins"] == []
+
+    def test_no_leakage_of_extra_skill_fields(self):
+        """Only calls should survive, not any other fields on skills."""
+        stats = {**SAMPLE_STATS, "skills": {"foo": {"calls": 3, "secret": "bad"}}}
+        result = anonymize(stats, "tok")
+        assert result["skills"] == {"foo": 3}
