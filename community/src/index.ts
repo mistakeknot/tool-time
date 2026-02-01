@@ -4,6 +4,7 @@ import { z } from "zod";
 
 type Bindings = {
   DB: D1Database;
+  ADMIN_TOKEN: string;
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -246,6 +247,47 @@ app.get("/v1/api/stats", async (c) => {
       plugins: plugins.results ?? [],
     },
   });
+});
+
+// --- Admin ---
+
+function requireAdmin(c: any): Response | null {
+  const auth = c.req.header("Authorization");
+  if (!auth || auth !== `Bearer ${c.env.ADMIN_TOKEN}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  return null;
+}
+
+app.get("/v1/api/admin/submissions", async (c) => {
+  const denied = requireAdmin(c);
+  if (denied) return denied;
+
+  const limit = Math.min(Number(c.req.query("limit") || 50), 200);
+  const rows = await c.env.DB.prepare(
+    `SELECT id, submission_token, generated_at, submitted_at, total_events, model
+     FROM submissions
+     ORDER BY submitted_at DESC
+     LIMIT ?`
+  ).bind(limit).all();
+
+  return c.json({ submissions: rows.results ?? [] });
+});
+
+app.delete("/v1/api/admin/submissions/:id", async (c) => {
+  const denied = requireAdmin(c);
+  if (denied) return denied;
+
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id <= 0) {
+    return c.json({ error: "Invalid ID" }, 400);
+  }
+
+  const result = await c.env.DB.prepare(
+    "DELETE FROM submissions WHERE id = ?"
+  ).bind(id).run();
+
+  return c.json({ status: "deleted", rows_affected: result.meta.changes });
 });
 
 // GDPR Article 17: data deletion
