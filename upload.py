@@ -98,7 +98,10 @@ def upload(payload: dict) -> bool:
     req = Request(
         API_ENDPOINT,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "tool-time-upload/0.3",
+        },
         method="POST",
     )
     try:
