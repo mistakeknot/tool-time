@@ -13,6 +13,7 @@ from summarize import (
     compute_tool_statistics,
     is_user_rejection,
     load_events,
+    scan_installed_plugins,
 )
 
 
@@ -22,6 +23,7 @@ def _make_event(
     project: str = "/test/project",
     error: str | None = None,
     file: str | None = None,
+    skill: str | None = None,
     session_id: str = "sess1",
     seq: int = 1,
     ts: datetime | None = None,
@@ -39,6 +41,8 @@ def _make_event(
     }
     if file:
         ev["file"] = file
+    if skill:
+        ev["skill"] = skill
     return ev
 
 
@@ -178,3 +182,148 @@ class TestComputeToolStatistics:
         stats = compute_tool_statistics(events)
         assert stats["tools"]["Edit"]["calls"] == 1
         assert stats["tools"]["Edit"]["errors"] == 1
+
+    def test_empty_stats_have_new_keys(self):
+        stats = compute_tool_statistics([])
+        assert stats["skills"] == {}
+        assert stats["mcp_servers"] == {}
+        assert isinstance(stats["installed_plugins"], list)
+
+
+class TestSkillAggregation:
+    def test_counts_skills(self):
+        events = [
+            _make_event("Task", skill="superpowers:brainstorming", seq=1),
+            _make_event("Task", skill="superpowers:brainstorming", seq=2),
+            _make_event("Read", skill="tool-time:tool-time", seq=3),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["skills"]["superpowers:brainstorming"]["calls"] == 2
+        assert stats["skills"]["tool-time:tool-time"]["calls"] == 1
+
+    def test_ignores_events_without_skill(self):
+        events = [
+            _make_event("Read", seq=1),
+            _make_event("Edit", seq=2),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["skills"] == {}
+
+    def test_skills_sorted_by_calls(self):
+        events = [
+            _make_event("Task", skill="alpha", seq=1),
+            _make_event("Task", skill="beta", seq=2),
+            _make_event("Task", skill="beta", seq=3),
+        ]
+        stats = compute_tool_statistics(events)
+        names = list(stats["skills"].keys())
+        assert names == ["beta", "alpha"]
+
+    def test_skill_only_counted_on_call_events(self):
+        """PostToolUse events should not count skill invocations."""
+        events = [
+            _make_event("Task", event_type="PreToolUse", skill="foo", seq=1),
+            _make_event("Task", event_type="PostToolUse", skill="foo", seq=2),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["skills"]["foo"]["calls"] == 1
+
+
+class TestMcpServerAggregation:
+    def test_parses_mcp_server(self):
+        events = [
+            _make_event("mcp__chrome-devtools__new_page", seq=1),
+            _make_event("mcp__chrome-devtools__click", seq=2),
+            _make_event("mcp__slack__send_message", seq=3),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["mcp_servers"]["chrome-devtools"]["calls"] == 2
+        assert stats["mcp_servers"]["slack"]["calls"] == 1
+
+    def test_mcp_server_errors(self):
+        events = [
+            _make_event("mcp__slack__send", event_type="PreToolUse", seq=1),
+            _make_event("mcp__slack__send", event_type="PostToolUse", error="timeout", seq=2),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["mcp_servers"]["slack"]["calls"] == 1
+        assert stats["mcp_servers"]["slack"]["errors"] == 1
+
+    def test_empty_server_name_ignored(self):
+        """mcp____tool should be ignored (empty server name)."""
+        events = [
+            _make_event("mcp____some_tool", seq=1),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["mcp_servers"] == {}
+
+    def test_only_two_parts_ignored(self):
+        """mcp__server with no tool part should be ignored."""
+        events = [
+            _make_event("mcp__server", seq=1),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["mcp_servers"] == {}
+
+    def test_mcp_tools_also_in_regular_tool_stats(self):
+        """MCP tools should appear in both mcp_servers and regular tool stats."""
+        events = [
+            _make_event("mcp__slack__send", seq=1),
+        ]
+        stats = compute_tool_statistics(events)
+        assert "mcp__slack__send" in stats["tools"]
+        assert "slack" in stats["mcp_servers"]
+
+    def test_mcp_servers_sorted_by_calls(self):
+        events = [
+            _make_event("mcp__alpha__tool", seq=1),
+            _make_event("mcp__beta__tool", seq=2),
+            _make_event("mcp__beta__tool", seq=3),
+        ]
+        stats = compute_tool_statistics(events)
+        names = list(stats["mcp_servers"].keys())
+        assert names == ["beta", "alpha"]
+
+
+class TestScanInstalledPlugins:
+    def test_reads_enabled_plugins(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({
+            "enabledPlugins": {
+                "tool-time@interagency-marketplace": True,
+                "superpowers@superpowers-marketplace": True,
+            }
+        }))
+        result = scan_installed_plugins(settings_file=settings)
+        assert result == [
+            "superpowers@superpowers-marketplace",
+            "tool-time@interagency-marketplace",
+        ]
+
+    def test_missing_file_returns_empty(self, tmp_path):
+        result = scan_installed_plugins(settings_file=tmp_path / "nonexistent.json")
+        assert result == []
+
+    def test_malformed_json_returns_empty(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text("not json{{{")
+        result = scan_installed_plugins(settings_file=settings)
+        assert result == []
+
+    def test_empty_enabled_plugins(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"enabledPlugins": {}}))
+        result = scan_installed_plugins(settings_file=settings)
+        assert result == []
+
+    def test_non_dict_enabled_plugins(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"enabledPlugins": ["a", "b"]}))
+        result = scan_installed_plugins(settings_file=settings)
+        assert result == []
+
+    def test_missing_enabled_plugins_key(self, tmp_path):
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"other_key": "value"}))
+        result = scan_installed_plugins(settings_file=settings)
+        assert result == []

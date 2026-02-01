@@ -61,13 +61,36 @@ def load_events(
     return events
 
 
+def scan_installed_plugins(
+    settings_file: Path | None = None,
+) -> list[str]:
+    """Read installed plugins from Claude settings."""
+    if settings_file is None:
+        settings_file = Path.home() / ".claude" / "settings.json"
+
+    if settings_file.exists():
+        try:
+            settings = json.loads(settings_file.read_text())
+            plugins = settings.get("enabledPlugins", {})
+            if isinstance(plugins, dict):
+                return sorted(plugins.keys())
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return []
+
+
 def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute per-tool call/error/rejection counts and session-scoped
-    edit-without-read count."""
+    """Compute per-tool call/error/rejection counts, skill counts,
+    MCP server stats, and session-scoped edit-without-read count."""
     tool_counts: Counter[str] = Counter()
     tool_errors: Counter[str] = Counter()
     tool_rejections: Counter[str] = Counter()
     model_counts: Counter[str] = Counter()
+    skill_counts: Counter[str] = Counter()
+    mcp_server_stats: dict[str, dict[str, int]] = defaultdict(
+        lambda: {"calls": 0, "errors": 0}
+    )
 
     # Group file ops by session for edit-without-read detection
     session_file_ops: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
@@ -88,6 +111,17 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
             session_id = ev["id"].rsplit("-", 1)[0]
             session_file_ops[session_id].append((tool, file_path))
 
+            # Skills
+            skill_name = ev.get("skill")
+            if skill_name:
+                skill_counts[skill_name] += 1
+
+            # MCP servers — parse from mcp__<server>__<tool> pattern
+            if tool.startswith("mcp__"):
+                parts = tool.split("__", 2)
+                if len(parts) >= 3 and parts[1]:
+                    mcp_server_stats[parts[1]]["calls"] += 1
+
         # Count errors from PostToolUse or ToolUse events
         if event_type in ("PostToolUse", "ToolUse"):
             error = ev.get("error")
@@ -96,6 +130,11 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
                     tool_rejections[tool] += 1
                 else:
                     tool_errors[tool] += 1
+                    # Track MCP server errors
+                    if tool.startswith("mcp__"):
+                        parts = tool.split("__", 2)
+                        if len(parts) >= 3 and parts[1]:
+                            mcp_server_stats[parts[1]]["errors"] += 1
 
     # Session-scoped edit-without-read
     edit_without_read_count = 0
@@ -119,6 +158,16 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
             "rejections": tool_rejections.get(tool, 0),
         }
 
+    # Build skill stats
+    skills: dict[str, dict[str, int]] = {}
+    for name in sorted(skill_counts, key=skill_counts.get, reverse=True):
+        skills[name] = {"calls": skill_counts[name]}
+
+    # Build MCP server stats (only include servers with actual usage)
+    mcp_servers: dict[str, dict[str, int]] = {}
+    for name in sorted(mcp_server_stats, key=lambda n: mcp_server_stats[n]["calls"], reverse=True):
+        mcp_servers[name] = dict(mcp_server_stats[name])
+
     # Most common model, or null
     model = model_counts.most_common(1)[0][0] if model_counts else None
 
@@ -128,6 +177,9 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
         "tools": tools,
         "edit_without_read_count": edit_without_read_count,
         "model": model,
+        "skills": skills,
+        "mcp_servers": mcp_servers,
+        "installed_plugins": scan_installed_plugins(),
     }
 
 
