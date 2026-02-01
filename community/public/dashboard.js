@@ -12,6 +12,11 @@ async function loadDashboard() {
     renderToolsChart(data.tools);
     renderErrorsChart(data.tools);
     renderModelsChart(data.models);
+    if (data.dimensions) {
+      renderSkillsChart(data.dimensions.skills);
+      renderMcpChart(data.dimensions.mcp_servers);
+      renderPluginsChart(data.dimensions.plugins);
+    }
   } catch (err) {
     document.getElementById("subtitle").textContent =
       "Unable to load community data. Try again later.";
@@ -118,6 +123,87 @@ function renderModelsChart(models) {
             },
           },
         },
+      },
+    },
+  });
+}
+
+function renderSkillsChart(skills) {
+  if (!skills || !skills.length) return;
+  document.getElementById("skills-section").style.display = "";
+  new Chart(document.getElementById("skills-chart"), {
+    type: "bar",
+    data: {
+      labels: skills.map((s) => s.name),
+      datasets: [
+        {
+          label: "Total Calls",
+          data: skills.map((s) => s.total_calls),
+          backgroundColor: "#3fb950",
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+        y: { ticks: { color: "#c9d1d9" }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderMcpChart(mcpServers) {
+  if (!mcpServers || !mcpServers.length) return;
+  document.getElementById("mcp-section").style.display = "";
+  new Chart(document.getElementById("mcp-chart"), {
+    type: "bar",
+    data: {
+      labels: mcpServers.map((m) => m.name),
+      datasets: [
+        {
+          label: "Total Calls",
+          data: mcpServers.map((m) => m.total_calls),
+          backgroundColor: "#d2a8ff",
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+        y: { ticks: { color: "#c9d1d9" }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderPluginsChart(plugins) {
+  if (!plugins || !plugins.length) return;
+  document.getElementById("plugins-section").style.display = "";
+  new Chart(document.getElementById("plugins-chart"), {
+    type: "bar",
+    data: {
+      labels: plugins.map((p) => p.plugin_name),
+      datasets: [
+        {
+          label: "Install Count",
+          data: plugins.map((p) => p.install_count),
+          backgroundColor: "#f0883e",
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+        y: { ticks: { color: "#c9d1d9" }, grid: { display: false } },
       },
     },
   });
