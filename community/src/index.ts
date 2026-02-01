@@ -212,7 +212,6 @@ app.get("/v1/api/stats", async (c) => {
      JOIN submissions s ON s.id = ss.submission_id
      WHERE s.submitted_at >= datetime('now', '-7 days')
      GROUP BY ss.name
-     HAVING COUNT(DISTINCT s.submission_token) >= 10
      ORDER BY total_calls DESC
      LIMIT 50`
   ).all();
@@ -226,7 +225,6 @@ app.get("/v1/api/stats", async (c) => {
      JOIN submissions s ON s.id = ms.submission_id
      WHERE s.submitted_at >= datetime('now', '-7 days')
      GROUP BY ms.name
-     HAVING COUNT(DISTINCT s.submission_token) >= 10
      ORDER BY total_calls DESC
      LIMIT 50`
   ).all();
@@ -234,7 +232,6 @@ app.get("/v1/api/stats", async (c) => {
   const plugins = await c.env.DB.prepare(
     `SELECT plugin_name, install_count
      FROM plugin_usage_aggregate
-     WHERE install_count >= 10
      ORDER BY install_count DESC
      LIMIT 50`
   ).all();
