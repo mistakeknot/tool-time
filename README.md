@@ -159,6 +159,8 @@ cd community && npm run dev
 cd community && npm run deploy
 ```
 
+Deploys happen automatically on `git push` when `community/` files change (via git pre-push hook).
+
 ## File structure
 
 ```
