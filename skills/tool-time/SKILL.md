@@ -7,6 +7,9 @@ triggers:
   - tool-time
   - show patterns
   - analyze tools
+  - delete my data
+  - remove my data
+  - forget me
 user_invocable: true
 ---
 
@@ -88,3 +91,14 @@ After analysis, suggest relevant skills from the playbooks.com directory:
    - Why it's relevant based on the user's data
 
 If no relevant skills are found, skip this section entirely. Don't force recommendations.
+
+## Data Deletion
+
+If the user asks to delete their community data (triggers: "delete my data", "remove my data", "forget me", "GDPR delete"):
+
+1. Read `~/.claude/tool-time/config.json` to get the `submission_token`
+2. If no token exists, tell the user they have no community data to delete
+3. Show the user their token and confirm they want to proceed
+4. Run: `curl -s -X DELETE "https://tool-time-api.mistakeknot.workers.dev/v1/api/user/<token>"`
+5. Report the result
+6. Offer to also set `community_sharing` to `false` in config.json to stop future uploads
