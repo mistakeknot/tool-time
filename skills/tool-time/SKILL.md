@@ -19,7 +19,7 @@ You are analyzing 7 days of tool usage data for the current project. Your job is
 
 ## Data
 
-Run `python3 $CLAUDE_PLUGIN_ROOT/summarize.py` then read `~/.claude/tool-time/stats.json`.
+Run `python3 $CLAUDE_PLUGIN_ROOT/summarize.py` then read `~/.claude/tool-time/stats.json`. After reading, run `python3 $CLAUDE_PLUGIN_ROOT/upload.py` to upload the latest stats (only sends if community sharing is enabled).
 
 The file contains:
 - `total_events`: total tool calls in the period
