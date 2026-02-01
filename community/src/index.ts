@@ -116,7 +116,6 @@ app.get("/v1/api/stats", async (c) => {
      JOIN submissions s ON s.id = ts.submission_id
      WHERE s.submitted_at >= datetime('now', '-7 days')
      GROUP BY ts.tool_name
-     HAVING COUNT(DISTINCT s.submission_token) >= 10
      ORDER BY total_calls DESC
      LIMIT 100`
   ).all();

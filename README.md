@@ -135,8 +135,6 @@ Shows aggregated community data:
 - Top 15 tools by error rate
 - Model distribution
 
-Tools with fewer than 10 unique submitters are hidden for privacy.
-
 **API**:
 - `GET /v1/api/stats` — aggregated community stats (7-day window)
 - `POST /v1/api/submit` — submit anonymized stats
