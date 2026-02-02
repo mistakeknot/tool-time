@@ -57,6 +57,7 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
             continue
 
         if record_type == "assistant":
+            model = msg.get("model", "")
             for block in content:
                 if not isinstance(block, dict):
                     continue
@@ -77,6 +78,8 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
                         "error": None,
                         "source": "claude-code",
                     }
+                    if model:
+                        event_dict["model"] = model
                     if file_path:
                         event_dict["file"] = file_path
                     if skill_name:
