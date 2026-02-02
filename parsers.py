@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transcript parsers for Claude Code and Codex CLI.
+"""Transcript parsers for Claude Code, Codex CLI, and OpenClaw.
 
 Each parser reads session JSONL transcripts and yields unified event dicts
 compatible with events.jsonl schema.
@@ -13,7 +13,7 @@ from typing import Generator
 # Unified event schema (v1)
 # {"v":1, "id":"<session>-<seq>", "ts":"<iso8601>", "event":"ToolUse",
 #  "tool":"<name>", "project":"<cwd>", "error":null,
-#  "source":"claude-code"|"codex", "file":null|"<path>"}
+#  "source":"claude-code"|"codex"|"openclaw", "file":null|"<path>"}
 
 
 def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
@@ -199,6 +199,120 @@ def parse_codex(session_path: Path) -> Generator[dict, None, None]:
     # Yield any unmatched calls
     for event in pending_calls.values():
         yield event
+
+
+def parse_openclaw(session_path: Path) -> Generator[dict, None, None]:
+    """Parse an OpenClaw (Moltbot/Clawdbot) session transcript.
+
+    Format: ~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl
+    Also: ~/.moltbot/... and ~/.clawdbot/...
+    Records have top-level 'type' field. Tool calls are in assistant messages
+    with content blocks of type 'toolCall'. Results are separate messages with
+    role 'toolResult' containing toolCallId, toolName, and isError.
+    """
+    cwd = ""
+    session_id = session_path.stem
+    model = ""
+    seq = 0
+
+    pending_calls: dict[str, dict] = {}
+
+    for line in session_path.read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        record_type = record.get("type", "")
+        ts = record.get("timestamp", "")
+
+        if record_type == "session":
+            cwd = record.get("cwd", "")
+            session_id = record.get("id", session_id)
+            continue
+
+        if record_type == "model_change":
+            model = record.get("modelId", "")
+            continue
+
+        if record_type != "message":
+            continue
+
+        msg = record.get("message", {})
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "")
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+
+        if role == "assistant":
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "toolCall":
+                    seq += 1
+                    tool_name = block.get("name", "")
+                    tool_call_id = block.get("id", "")
+                    args = block.get("arguments", {})
+                    if not isinstance(args, dict):
+                        args = {}
+                    file_path = args.get("path") or args.get("file_path") or None
+                    event_dict = {
+                        "v": 1,
+                        "id": f"{session_id}-{seq}",
+                        "ts": ts,
+                        "event": "ToolUse",
+                        "tool": tool_name,
+                        "project": cwd,
+                        "error": None,
+                        "source": "openclaw",
+                    }
+                    if model:
+                        event_dict["model"] = model
+                    if file_path:
+                        event_dict["file"] = file_path
+                    pending_calls[tool_call_id] = event_dict
+
+        elif role == "toolResult":
+            tool_call_id = msg.get("toolCallId", "")
+            event = pending_calls.pop(tool_call_id, None)
+            if event is None:
+                continue
+            if msg.get("isError"):
+                result_text = ""
+                for block in content:
+                    if isinstance(block, dict):
+                        result_text += block.get("text", "")
+                event["error"] = result_text[:200] if result_text else "error"
+            yield event
+
+    for event in pending_calls.values():
+        yield event
+
+
+def find_openclaw_sessions(base_dirs: list[Path] | None = None) -> list[Path]:
+    """Find all OpenClaw/Moltbot/Clawdbot session transcript files."""
+    if base_dirs is None:
+        home = Path.home()
+        base_dirs = [
+            home / ".openclaw" / "agents",
+            home / ".moltbot" / "agents",
+            home / ".clawdbot" / "agents",
+        ]
+    sessions: list[Path] = []
+    seen: set[str] = set()
+    for base in base_dirs:
+        if not base.exists():
+            continue
+        for p in sorted(base.glob("*/sessions/*.jsonl")):
+            # Deduplicate across directories (same session ID may exist in multiple)
+            if p.name not in seen:
+                seen.add(p.name)
+                sessions.append(p)
+    return sorted(sessions)
 
 
 def find_claude_code_sessions(base: Path | None = None) -> list[Path]:

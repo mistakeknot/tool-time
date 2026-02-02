@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Backfill events.jsonl from historical session transcripts.
 
-Parses all Claude Code and Codex CLI transcripts, emits unified events
+Parses all Claude Code, Codex CLI, and OpenClaw transcripts, emits unified events
 to ~/.claude/tool-time/events.jsonl. Safe to re-run — deduplicates by
 event ID.
 """
@@ -14,8 +14,10 @@ from pathlib import Path
 from parsers import (
     find_claude_code_sessions,
     find_codex_sessions,
+    find_openclaw_sessions,
     parse_claude_code,
     parse_codex,
+    parse_openclaw,
 )
 
 DATA_DIR = Path.home() / ".claude" / "tool-time"
@@ -43,9 +45,11 @@ def main() -> None:
 
     claude_sessions = find_claude_code_sessions()
     codex_sessions = find_codex_sessions()
+    openclaw_sessions = find_openclaw_sessions()
 
     print(f"Found {len(claude_sessions)} Claude Code sessions")
     print(f"Found {len(codex_sessions)} Codex CLI sessions")
+    print(f"Found {len(openclaw_sessions)} OpenClaw sessions")
 
     new_events = 0
     skipped = 0
@@ -78,6 +82,20 @@ def main() -> None:
                     new_events += 1
                     tools[event["tool"]] += 1
                     sources["codex"] += 1
+            except Exception as e:
+                errors += 1
+                print(f"  Error parsing {path.name}: {e}", file=sys.stderr)
+
+        for path in openclaw_sessions:
+            try:
+                for event in parse_openclaw(path):
+                    if event["id"] in existing_ids:
+                        skipped += 1
+                        continue
+                    f.write(json.dumps(event) + "\n")
+                    new_events += 1
+                    tools[event["tool"]] += 1
+                    sources["openclaw"] += 1
             except Exception as e:
                 errors += 1
                 print(f"  Error parsing {path.name}: {e}", file=sys.stderr)
