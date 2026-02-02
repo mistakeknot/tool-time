@@ -8,52 +8,63 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <header>
-    <h1>tool-time Community Analytics</h1>
-    <p id="subtitle">Anonymized tool usage across Claude Code users · <a href="https://github.com/mistakeknot/tool-time#installation">Install tool-time</a></p>
-  </header>
-  <main>
-    <section id="overview">
-      <div class="stat-card">
-        <span class="stat-value" id="total-submissions">—</span>
-        <span class="stat-label">Submissions (7d)</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-value" id="unique-submitters">—</span>
-        <span class="stat-label">Unique Submitters</span>
-      </div>
-    </section>
-    <section id="charts">
-      <div class="chart-container">
-        <h2>Top Tools by Usage</h2>
-        <canvas id="tools-chart"></canvas>
-      </div>
-      <div class="chart-container">
-        <h2>Error Rate by Tool</h2>
-        <canvas id="errors-chart"></canvas>
-      </div>
-      <div class="chart-container">
-        <h2>Model Distribution</h2>
-        <canvas id="models-chart"></canvas>
-      </div>
-      <div class="chart-container" id="skills-section" style="display:none">
-        <h2>Top Skills</h2>
-        <canvas id="skills-chart"></canvas>
-      </div>
-      <div class="chart-container" id="mcp-section" style="display:none">
-        <h2>Top MCP Servers</h2>
-        <canvas id="mcp-chart"></canvas>
-      </div>
-      <div class="chart-container" id="plugins-section" style="display:none">
-        <h2>Top Plugins</h2>
-        <canvas id="plugins-chart"></canvas>
-      </div>
-    </section>
-    <footer>
-      <p>Data is anonymized and aggregated.</p>
-      <p><a href="https://github.com/mistakeknot/tool-time">tool-time on GitHub</a></p>
-    </footer>
-  </main>
+  <aside id="sidebar">
+    <h3>Charts</h3>
+    <label><input type="checkbox" data-chart="tools" checked> Tools</label>
+    <label><input type="checkbox" data-chart="errors" checked> Error Rates</label>
+    <label><input type="checkbox" data-chart="models" checked> Models</label>
+    <label><input type="checkbox" data-chart="skills" checked> Skills</label>
+    <label><input type="checkbox" data-chart="mcp" checked> MCP Servers</label>
+    <label><input type="checkbox" data-chart="plugins" checked> Plugins</label>
+  </aside>
+  <div id="content">
+    <header>
+      <h1>tool-time Community Analytics</h1>
+      <p id="subtitle">Anonymized tool usage across Claude Code, Codex CLI, and OpenClaw users · <a href="https://github.com/mistakeknot/tool-time#install">Install tool-time</a></p>
+    </header>
+    <main>
+      <section id="overview">
+        <div class="stat-card">
+          <span class="stat-value" id="total-submissions">—</span>
+          <span class="stat-label">Submissions (7d)</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-value" id="unique-submitters">—</span>
+          <span class="stat-label">Unique Submitters</span>
+        </div>
+      </section>
+      <section id="charts">
+        <div class="chart-container" id="tools-section">
+          <h2>Top Tools by Usage</h2>
+          <canvas id="tools-chart"></canvas>
+        </div>
+        <div class="chart-container" id="errors-section">
+          <h2>Error Rate by Tool</h2>
+          <canvas id="errors-chart"></canvas>
+        </div>
+        <div class="chart-container" id="models-section">
+          <h2>Model Distribution</h2>
+          <canvas id="models-chart"></canvas>
+        </div>
+        <div class="chart-container" id="skills-section" style="display:none">
+          <h2>Top Skills</h2>
+          <canvas id="skills-chart"></canvas>
+        </div>
+        <div class="chart-container" id="mcp-section" style="display:none">
+          <h2>Top MCP Servers</h2>
+          <canvas id="mcp-chart"></canvas>
+        </div>
+        <div class="chart-container" id="plugins-section" style="display:none">
+          <h2>Top Plugins</h2>
+          <canvas id="plugins-chart"></canvas>
+        </div>
+      </section>
+      <footer>
+        <p>Data is anonymized and aggregated.</p>
+        <p><a href="https://github.com/mistakeknot/tool-time">tool-time on GitHub</a></p>
+      </footer>
+    </main>
+  </div>
   <script src="dashboard.js"></script>
 </body>
 </html>

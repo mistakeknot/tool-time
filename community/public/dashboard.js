@@ -129,7 +129,11 @@ function renderModelsChart(models) {
 }
 
 function renderSkillsChart(skills) {
-  if (!skills || !skills.length) return;
+  if (!skills || !skills.length) {
+    document.getElementById("skills-section").dataset.hasData = "false";
+    return;
+  }
+  document.getElementById("skills-section").dataset.hasData = "true";
   document.getElementById("skills-section").style.display = "";
   new Chart(document.getElementById("skills-chart"), {
     type: "bar",
@@ -156,7 +160,11 @@ function renderSkillsChart(skills) {
 }
 
 function renderMcpChart(mcpServers) {
-  if (!mcpServers || !mcpServers.length) return;
+  if (!mcpServers || !mcpServers.length) {
+    document.getElementById("mcp-section").dataset.hasData = "false";
+    return;
+  }
+  document.getElementById("mcp-section").dataset.hasData = "true";
   document.getElementById("mcp-section").style.display = "";
   new Chart(document.getElementById("mcp-chart"), {
     type: "bar",
@@ -183,7 +191,11 @@ function renderMcpChart(mcpServers) {
 }
 
 function renderPluginsChart(plugins) {
-  if (!plugins || !plugins.length) return;
+  if (!plugins || !plugins.length) {
+    document.getElementById("plugins-section").dataset.hasData = "false";
+    return;
+  }
+  document.getElementById("plugins-section").dataset.hasData = "true";
   document.getElementById("plugins-section").style.display = "";
   new Chart(document.getElementById("plugins-chart"), {
     type: "bar",
@@ -209,4 +221,31 @@ function renderPluginsChart(plugins) {
   });
 }
 
+// Sidebar chart filters
+const CHART_SECTION_MAP = {
+  tools: "tools-section",
+  errors: "errors-section",
+  models: "models-section",
+  skills: "skills-section",
+  mcp: "mcp-section",
+  plugins: "plugins-section",
+};
+
+function initFilters() {
+  document.querySelectorAll("#sidebar input[data-chart]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const sectionId = CHART_SECTION_MAP[cb.dataset.chart];
+      const section = document.getElementById(sectionId);
+      if (!section) return;
+      // Only hide/show if the section has data (wasn't hidden by render logic)
+      if (cb.checked) {
+        section.style.display = section.dataset.hasData === "false" ? "none" : "";
+      } else {
+        section.style.display = "none";
+      }
+    });
+  });
+}
+
+initFilters();
 loadDashboard();

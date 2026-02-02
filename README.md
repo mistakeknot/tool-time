@@ -1,10 +1,10 @@
 # tool-time
 
-Tool usage analytics for Claude Code — tracks every tool call, detects inefficiencies, and suggests fixes.
+Tool usage analytics for Claude Code, Codex CLI, and OpenClaw — tracks every tool call, detects inefficiencies, and suggests fixes.
 
 ## What it does
 
-Hooks capture every tool call in your Claude Code sessions. A Python script aggregates 7 days of stats. An AI agent skill reads those stats, spots patterns (high error rates, edit-without-read, Bash overuse), checks your CLAUDE.md for gaps, and proposes concrete fixes.
+Hooks capture every tool call in your Claude Code sessions. Transcript parsers extract tool usage from Codex CLI and OpenClaw (Moltbot/Clawdbot) sessions. A Python script aggregates 7 days of stats. An AI agent skill reads those stats, spots patterns (high error rates, edit-without-read, Bash overuse), checks your CLAUDE.md for gaps, and proposes concrete fixes.
 
 Optionally, you can share anonymized stats to a community dashboard and compare your patterns against other users.
 
@@ -97,6 +97,9 @@ Enable by setting `community_sharing: true` in `~/.claude/tool-time/config.json`
 - Per-tool stats: calls, errors, rejections
 - Edit-without-read count
 - Model name
+- Skill usage (names and call counts)
+- MCP server usage (names, calls, errors)
+- Installed plugins (public plugin identifiers)
 
 **What is NOT shared**: file paths, project names, error messages, skill arguments.
 
@@ -127,13 +130,14 @@ Nothing leaves your machine unless you opt in to community sharing.
 
 ## Community dashboard
 
-**URL**: [tool-time-api.mistakeknot.workers.dev](https://tool-time-api.mistakeknot.workers.dev)
+**URL**: [tool-time.org](https://tool-time.org)
 
 Shows aggregated community data:
 
 - Top 20 tools by usage
 - Top 15 tools by error rate
 - Model distribution
+- Top skills, MCP servers, and plugins
 
 **API**:
 - `GET /v1/api/stats` — aggregated community stats (7-day window)
@@ -149,7 +153,7 @@ uv run --with pytest pytest test_summarize.py test_upload.py -v
 # Refresh stats manually
 python3 summarize.py
 
-# Parse historical transcripts (Codex CLI support)
+# Parse historical transcripts (Codex CLI + OpenClaw)
 python3 backfill.py
 
 # Worker dev server
@@ -176,7 +180,7 @@ Deploys happen automatically on `git push` when `community/` files change (via g
 │   └── migrations/         # D1 database schema
 ├── summarize.py            # Stats aggregation (7-day, per-project)
 ├── upload.py               # Anonymous community submission
-├── backfill.py             # Parse historical Codex CLI transcripts
+├── backfill.py             # Parse historical Codex CLI + OpenClaw transcripts
 ├── parsers.py              # Transcript parsers
 ├── test_summarize.py       # Tests
 ├── test_upload.py          # Tests
@@ -186,7 +190,11 @@ Deploys happen automatically on `git push` when `community/` files change (via g
 
 ## Codex CLI support
 
-Codex CLI doesn't support hooks, so `backfill.py` parses historical session transcripts from `~/.codex-cli/sessions/` instead. The Codex skill variant (`tool-time-codex`) runs `backfill.py` before analysis. Same stats format, same agent analysis.
+Codex CLI doesn't support hooks, so `backfill.py` parses historical session transcripts from `~/.codex/sessions/` instead. The Codex skill variant (`tool-time-codex`) runs `backfill.py` before analysis. Same stats format, same agent analysis.
+
+## OpenClaw support
+
+OpenClaw (formerly Moltbot, originally Clawdbot) transcripts are parsed from `~/.openclaw/agents/`, `~/.moltbot/agents/`, and `~/.clawdbot/agents/`. The parser extracts tool calls (`exec`, `read`, `gateway`, `process`), model info from `model_change` events, and errors from `toolResult` messages. Sessions are deduplicated across directories since the app was rebranded multiple times.
 
 ## License
 
