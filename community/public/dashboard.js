@@ -2,10 +2,24 @@
 // All data rendered via textContent or Chart.js (no innerHTML)
 
 const API_BASE = "/v1/api/stats";
+let currentClient = "";
+
+// Track chart instances for cleanup on re-render
+const chartInstances = {};
+
+function getOrCreateChart(canvasId, config) {
+  if (chartInstances[canvasId]) {
+    chartInstances[canvasId].destroy();
+  }
+  const instance = new Chart(document.getElementById(canvasId), config);
+  chartInstances[canvasId] = instance;
+  return instance;
+}
 
 async function loadDashboard() {
   try {
-    const resp = await fetch(API_BASE);
+    const url = currentClient ? `${API_BASE}?client=${currentClient}` : API_BASE;
+    const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     renderOverview(data.overview);
@@ -32,7 +46,7 @@ function renderOverview(overview) {
 function renderToolsChart(tools) {
   if (!tools.length) return;
   const top = tools.slice(0, 20);
-  new Chart(document.getElementById("tools-chart"), {
+  getOrCreateChart("tools-chart", {
     type: "bar",
     data: {
       labels: top.map((t) => t.tool_name),
@@ -70,7 +84,7 @@ function renderErrorsChart(tools) {
 
   if (!withErrors.length) return;
 
-  new Chart(document.getElementById("errors-chart"), {
+  getOrCreateChart("errors-chart", {
     type: "bar",
     data: {
       labels: withErrors.map((t) => t.name),
@@ -100,7 +114,7 @@ function renderErrorsChart(tools) {
 function renderModelsChart(models) {
   if (!models.length) return;
   const total = models.reduce((s, m) => s + m.count, 0);
-  new Chart(document.getElementById("models-chart"), {
+  getOrCreateChart("models-chart", {
     type: "doughnut",
     data: {
       labels: models.map((m) => m.model),
@@ -135,7 +149,7 @@ function renderSkillsChart(skills) {
   }
   document.getElementById("skills-section").dataset.hasData = "true";
   document.getElementById("skills-section").style.display = "";
-  new Chart(document.getElementById("skills-chart"), {
+  getOrCreateChart("skills-chart", {
     type: "bar",
     data: {
       labels: skills.map((s) => s.name),
@@ -166,7 +180,7 @@ function renderMcpChart(mcpServers) {
   }
   document.getElementById("mcp-section").dataset.hasData = "true";
   document.getElementById("mcp-section").style.display = "";
-  new Chart(document.getElementById("mcp-chart"), {
+  getOrCreateChart("mcp-chart", {
     type: "bar",
     data: {
       labels: mcpServers.map((m) => m.name),
@@ -197,7 +211,7 @@ function renderPluginsChart(plugins) {
   }
   document.getElementById("plugins-section").dataset.hasData = "true";
   document.getElementById("plugins-section").style.display = "";
-  new Chart(document.getElementById("plugins-chart"), {
+  getOrCreateChart("plugins-chart", {
     type: "bar",
     data: {
       labels: plugins.map((p) => p.plugin_name),
@@ -247,5 +261,15 @@ function initFilters() {
   });
 }
 
+function initClientFilter() {
+  document.querySelectorAll('#sidebar input[name="client"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      currentClient = radio.value;
+      loadDashboard();
+    });
+  });
+}
+
 initFilters();
+initClientFilter();
 loadDashboard();

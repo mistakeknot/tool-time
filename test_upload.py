@@ -45,6 +45,7 @@ class TestAnonymize:
             "tools",
             "edit_without_read",
             "model",
+            "client",
             "skills",
             "mcp_servers",
             "installed_plugins",

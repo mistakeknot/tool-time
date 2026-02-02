@@ -7,6 +7,8 @@ community analytics API. Only runs if user has opted in via config.json.
 Designed to run as a background process on SessionEnd — never blocks.
 """
 
+import hashlib
+import hmac
 import json
 import secrets
 import sys
@@ -80,6 +82,7 @@ def anonymize(stats: dict, token: str) -> dict:
         },
         "edit_without_read": stats.get("edit_without_read_count", 0),
         "model": stats.get("model"),
+        "client": stats.get("client"),
         "skills": {
             name: s.get("calls", 0)
             for name, s in stats.get("skills", {}).items()
@@ -92,15 +95,22 @@ def anonymize(stats: dict, token: str) -> dict:
     }
 
 
+def sign_payload(payload_json: bytes, token: str) -> str:
+    """Compute HMAC-SHA256 signature for payload integrity."""
+    return hmac.new(token.encode(), payload_json, hashlib.sha256).hexdigest()
+
+
 def upload(payload: dict) -> bool:
     """POST anonymized payload to community API. Returns True on success."""
     data = json.dumps(payload).encode("utf-8")
+    signature = sign_payload(data, payload["submission_token"])
     req = Request(
         API_ENDPOINT,
         data=data,
         headers={
             "Content-Type": "application/json",
             "User-Agent": "tool-time-upload/0.3",
+            "X-Signature": signature,
         },
         method="POST",
     )

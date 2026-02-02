@@ -5,10 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>tool-time Community Analytics</title>
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous"></script>
 </head>
 <body>
   <aside id="sidebar">
+    <h3>Client</h3>
+    <label><input type="radio" name="client" value="" checked> All</label>
+    <label><input type="radio" name="client" value="claude-code"> Claude Code</label>
+    <label><input type="radio" name="client" value="codex"> Codex</label>
+    <label><input type="radio" name="client" value="openclaw"> OpenClaw</label>
     <h3>Charts</h3>
     <label><input type="checkbox" data-chart="tools" checked> Tools</label>
     <label><input type="checkbox" data-chart="errors" checked> Error Rates</label>

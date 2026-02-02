@@ -87,6 +87,7 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
     tool_errors: Counter[str] = Counter()
     tool_rejections: Counter[str] = Counter()
     model_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
     skill_counts: Counter[str] = Counter()
     mcp_server_stats: dict[str, dict[str, int]] = defaultdict(
         lambda: {"calls": 0, "errors": 0}
@@ -103,6 +104,9 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
         model = ev.get("model")
         if model:
             model_counts[model] += 1
+        source = ev.get("source")
+        if source:
+            source_counts[source] += 1
 
         # Count calls from PreToolUse or ToolUse events
         if event_type in ("PreToolUse", "ToolUse"):
@@ -168,8 +172,9 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
     for name in sorted(mcp_server_stats, key=lambda n: mcp_server_stats[n]["calls"], reverse=True):
         mcp_servers[name] = dict(mcp_server_stats[name])
 
-    # Most common model, or null
+    # Most common model/client, or null
     model = model_counts.most_common(1)[0][0] if model_counts else None
+    client = source_counts.most_common(1)[0][0] if source_counts else None
 
     return {
         "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -177,6 +182,7 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
         "tools": tools,
         "edit_without_read_count": edit_without_read_count,
         "model": model,
+        "client": client,
         "skills": skills,
         "mcp_servers": mcp_servers,
         "installed_plugins": scan_installed_plugins(),

@@ -9,7 +9,51 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-app.use("/v1/*", cors());
+// --- CORS: only on public endpoints ---
+app.use("/v1/api/stats", cors());
+app.use("/v1/api/submit", cors());
+
+// --- Helpers ---
+
+function hexToBytes(hex: string): Uint8Array {
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
+  }
+  return bytes;
+}
+
+async function verifySignature(
+  rawBody: ArrayBuffer,
+  signature: string,
+  token: string
+): Promise<boolean> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(token),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+  return crypto.subtle.verify("HMAC", key, hexToBytes(signature), rawBody);
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const aBuf = encoder.encode(a);
+  const bBuf = encoder.encode(b);
+  if (aBuf.byteLength !== bBuf.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(aBuf, bBuf);
+}
+
+function requireAdmin(c: any): Response | null {
+  const auth = c.req.header("Authorization");
+  if (!auth || !timingSafeEqual(auth, `Bearer ${c.env.ADMIN_TOKEN}`)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+  return null;
+}
 
 // --- Validation ---
 
@@ -47,13 +91,21 @@ const SubmitSchema = z.object({
   installed_plugins: z.array(z.string().regex(PLUGIN_NAME_RE).max(100))
     .max(100)
     .optional(),
+  client: z.enum(["claude-code", "codex", "openclaw"]).nullable().optional(),
 });
 
 // --- Routes ---
 
 app.post("/v1/api/submit", async (c) => {
-  const body = await c.req.json().catch(() => null);
-  if (!body) return c.json({ error: "Invalid JSON" }, 400);
+  // Capture raw body for signature verification
+  const rawBody = await c.req.arrayBuffer();
+  const bodyText = new TextDecoder().decode(rawBody);
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
 
   const parsed = SubmitSchema.safeParse(body);
   if (!parsed.success) {
@@ -61,6 +113,16 @@ app.post("/v1/api/submit", async (c) => {
   }
 
   const data = parsed.data;
+
+  // Verify HMAC signature
+  const signature = c.req.header("X-Signature");
+  if (!signature) {
+    return c.json({ error: "Missing signature" }, 401);
+  }
+  const valid = await verifySignature(rawBody, signature, data.submission_token);
+  if (!valid) {
+    return c.json({ error: "Invalid signature" }, 401);
+  }
 
   // Reject future timestamps or timestamps >7 days old
   const generated = new Date(data.generated);
@@ -78,8 +140,8 @@ app.post("/v1/api/submit", async (c) => {
   // Insert submission (UNIQUE constraint handles dedup)
   try {
     const result = await c.env.DB.prepare(
-      `INSERT INTO submissions (submission_token, generated_at, total_events, edit_without_read, model)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO submissions (submission_token, generated_at, total_events, edit_without_read, model, client)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(submission_token, generated_at) DO NOTHING`
     )
       .bind(
@@ -87,7 +149,8 @@ app.post("/v1/api/submit", async (c) => {
         data.generated,
         data.total_events,
         data.edit_without_read,
-        data.model ?? null
+        data.model ?? null,
+        data.client ?? null
       )
       .run();
 
@@ -140,17 +203,16 @@ app.post("/v1/api/submit", async (c) => {
       }
     }
 
-    // Plugins → aggregate table (no per-submission linkage for privacy)
+    // Plugin installs (deduped per token)
     if (data.installed_plugins) {
       for (const plugin of data.installed_plugins) {
         allStmts.push(
           c.env.DB.prepare(
-            `INSERT INTO plugin_usage_aggregate (plugin_name, install_count, last_seen)
-             VALUES (?, 1, datetime('now'))
-             ON CONFLICT(plugin_name) DO UPDATE SET
-               install_count = install_count + 1,
+            `INSERT INTO plugin_installs (plugin_name, submission_token, last_seen)
+             VALUES (?, ?, datetime('now'))
+             ON CONFLICT(plugin_name, submission_token) DO UPDATE SET
                last_seen = datetime('now')`
-          ).bind(plugin)
+          ).bind(plugin, data.submission_token)
         );
       }
     }
@@ -170,8 +232,17 @@ app.post("/v1/api/submit", async (c) => {
 });
 
 app.get("/v1/api/stats", async (c) => {
-  // Live aggregation (no precomputed table — add later if needed)
-  const tools = await c.env.DB.prepare(
+  const clientFilter = c.req.query("client");
+  const validClients = ["claude-code", "codex", "openclaw"];
+  const filterClient = clientFilter && validClients.includes(clientFilter) ? clientFilter : null;
+
+  // Build WHERE clause fragments
+  const baseWhere = "s.submitted_at >= datetime('now', '-7 days')";
+  const clientWhere = filterClient ? ` AND s.client = ?` : "";
+  const bindClient = (stmt: ReturnType<D1Database["prepare"]>) =>
+    filterClient ? stmt.bind(filterClient) : stmt;
+
+  const tools = await bindClient(c.env.DB.prepare(
     `SELECT
        ts.tool_name,
        SUM(ts.calls) as total_calls,
@@ -180,67 +251,79 @@ app.get("/v1/api/stats", async (c) => {
        COUNT(DISTINCT s.submission_token) as unique_submitters
      FROM tool_stats ts
      JOIN submissions s ON s.id = ts.submission_id
-     WHERE s.submitted_at >= datetime('now', '-7 days')
+     WHERE ${baseWhere}${clientWhere}
      GROUP BY ts.tool_name
      ORDER BY total_calls DESC
      LIMIT 100`
-  ).all();
+  )).all();
 
-  const overview = await c.env.DB.prepare(
+  const overview = await bindClient(c.env.DB.prepare(
     `SELECT
        COUNT(*) as total_submissions,
        COUNT(DISTINCT submission_token) as unique_submitters,
        MIN(submitted_at) as earliest,
        MAX(submitted_at) as latest
-     FROM submissions
-     WHERE submitted_at >= datetime('now', '-7 days')`
-  ).first();
+     FROM submissions s
+     WHERE ${baseWhere}${clientWhere}`
+  )).first();
 
-  const models = await c.env.DB.prepare(
+  const models = await bindClient(c.env.DB.prepare(
     `SELECT model, COUNT(*) as count
-     FROM submissions
-     WHERE submitted_at >= datetime('now', '-7 days')
+     FROM submissions s
+     WHERE ${baseWhere}${clientWhere}
        AND model IS NOT NULL
      GROUP BY model
      ORDER BY count DESC`
-  ).all();
+  )).all();
 
-  const skills = await c.env.DB.prepare(
+  const skills = await bindClient(c.env.DB.prepare(
     `SELECT ss.name,
             SUM(ss.calls) as total_calls,
             COUNT(DISTINCT s.submission_token) as unique_submitters
      FROM skill_stats ss
      JOIN submissions s ON s.id = ss.submission_id
-     WHERE s.submitted_at >= datetime('now', '-7 days')
+     WHERE ${baseWhere}${clientWhere}
      GROUP BY ss.name
      ORDER BY total_calls DESC
      LIMIT 50`
-  ).all();
+  )).all();
 
-  const mcpServers = await c.env.DB.prepare(
+  const mcpServers = await bindClient(c.env.DB.prepare(
     `SELECT ms.name,
             SUM(ms.calls) as total_calls,
             SUM(ms.errors) as total_errors,
             COUNT(DISTINCT s.submission_token) as unique_submitters
      FROM mcp_server_stats ms
      JOIN submissions s ON s.id = ms.submission_id
-     WHERE s.submitted_at >= datetime('now', '-7 days')
+     WHERE ${baseWhere}${clientWhere}
      GROUP BY ms.name
      ORDER BY total_calls DESC
      LIMIT 50`
-  ).all();
+  )).all();
 
   const plugins = await c.env.DB.prepare(
-    `SELECT plugin_name, install_count
-     FROM plugin_usage_aggregate
+    `SELECT plugin_name, COUNT(DISTINCT submission_token) as install_count
+     FROM plugin_installs
+     GROUP BY plugin_name
      ORDER BY install_count DESC
      LIMIT 50`
+  ).all();
+
+  // Client distribution (always unfiltered)
+  const clients = await c.env.DB.prepare(
+    `SELECT client, COUNT(*) as count
+     FROM submissions
+     WHERE submitted_at >= datetime('now', '-7 days')
+       AND client IS NOT NULL
+     GROUP BY client
+     ORDER BY count DESC`
   ).all();
 
   return c.json({
     overview: overview ?? {},
     tools: tools.results ?? [],
     models: models.results ?? [],
+    clients: clients.results ?? [],
     dimensions: {
       skills: skills.results ?? [],
       mcp_servers: mcpServers.results ?? [],
@@ -250,14 +333,6 @@ app.get("/v1/api/stats", async (c) => {
 });
 
 // --- Admin ---
-
-function requireAdmin(c: any): Response | null {
-  const auth = c.req.header("Authorization");
-  if (!auth || auth !== `Bearer ${c.env.ADMIN_TOKEN}`) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-  return null;
-}
 
 app.get("/v1/api/admin/submissions", async (c) => {
   const denied = requireAdmin(c);
@@ -290,14 +365,19 @@ app.delete("/v1/api/admin/submissions/:id", async (c) => {
   return c.json({ status: "deleted", rows_affected: result.meta.changes });
 });
 
-// GDPR Article 17: data deletion
-app.delete("/v1/api/user/:token", async (c) => {
-  const token = c.req.param("token");
+// GDPR Article 17: data deletion (POST to keep token out of URL logs)
+app.post("/v1/api/user/delete", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  if (!body?.submission_token) {
+    return c.json({ error: "Missing submission_token" }, 400);
+  }
 
-  // Delete tool_stats via cascade, then submissions
-  await c.env.DB.prepare(
-    `DELETE FROM submissions WHERE submission_token = ?`
-  ).bind(token).run();
+  const token = String(body.submission_token);
+
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM submissions WHERE submission_token = ?").bind(token),
+    c.env.DB.prepare("DELETE FROM plugin_installs WHERE submission_token = ?").bind(token),
+  ]);
 
   return c.json({ status: "deleted" });
 });
