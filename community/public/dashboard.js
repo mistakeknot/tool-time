@@ -2,7 +2,7 @@
 // All data rendered via textContent or Chart.js (no innerHTML)
 
 const API_BASE = "/v1/api/stats";
-let currentClient = "";
+let selectedClients = ["claude-code", "codex", "openclaw"];
 
 // Track chart instances for cleanup on re-render
 const chartInstances = {};
@@ -18,12 +18,15 @@ function getOrCreateChart(canvasId, config) {
 
 async function loadDashboard() {
   try {
-    const url = currentClient ? `${API_BASE}?client=${currentClient}` : API_BASE;
+    const allClients = ["claude-code", "codex", "openclaw"];
+    const isAll = selectedClients.length === allClients.length;
+    const url = isAll ? API_BASE : `${API_BASE}?client=${selectedClients.join(",")}`;
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     renderOverview(data.overview);
     renderToolsChart(data.tools);
+    renderToolsAdoptionChart(data.tools, data.overview);
     renderErrorsChart(data.tools);
     renderModelsChart(data.models);
     if (data.dimensions) {
@@ -52,8 +55,8 @@ function renderToolsChart(tools) {
       labels: top.map((t) => t.tool_name),
       datasets: [
         {
-          label: "Total Calls",
-          data: top.map((t) => t.total_calls),
+          label: "Avg Calls / User",
+          data: top.map((t) => t.avg_calls_per_submitter),
           backgroundColor: "#58a6ff",
         },
       ],
@@ -64,6 +67,45 @@ function renderToolsChart(tools) {
       plugins: { legend: { display: false } },
       scales: {
         x: { ticks: { color: "#8b949e" }, grid: { color: "#21262d" } },
+        y: { ticks: { color: "#c9d1d9" }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function renderToolsAdoptionChart(tools, overview) {
+  const totalUsers = overview.unique_submitters || 0;
+  if (!tools.length || !totalUsers) {
+    document.getElementById("tools-adoption-section").style.display = "none";
+    return;
+  }
+  document.getElementById("tools-adoption-section").dataset.hasData = "true";
+  document.getElementById("tools-adoption-section").style.display = "";
+  const top = tools.slice(0, 20);
+  getOrCreateChart("tools-adoption-chart", {
+    type: "bar",
+    data: {
+      labels: top.map((t) => t.tool_name),
+      datasets: [
+        {
+          label: "% of Users",
+          data: top.map((t) =>
+            ((t.unique_submitters / totalUsers) * 100).toFixed(1)
+          ),
+          backgroundColor: "#79c0ff",
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: { color: "#8b949e", callback: (v) => v + "%" },
+          grid: { color: "#21262d" },
+          max: 100,
+        },
         y: { ticks: { color: "#c9d1d9" }, grid: { display: false } },
       },
     },
@@ -155,8 +197,8 @@ function renderSkillsChart(skills) {
       labels: skills.map((s) => s.name),
       datasets: [
         {
-          label: "Total Calls",
-          data: skills.map((s) => s.total_calls),
+          label: "Avg Calls / User",
+          data: skills.map((s) => s.avg_calls_per_submitter),
           backgroundColor: "#3fb950",
         },
       ],
@@ -186,8 +228,8 @@ function renderMcpChart(mcpServers) {
       labels: mcpServers.map((m) => m.name),
       datasets: [
         {
-          label: "Total Calls",
-          data: mcpServers.map((m) => m.total_calls),
+          label: "Avg Calls / User",
+          data: mcpServers.map((m) => m.avg_calls_per_submitter),
           backgroundColor: "#d2a8ff",
         },
       ],
@@ -238,6 +280,7 @@ function renderPluginsChart(plugins) {
 // Sidebar chart filters
 const CHART_SECTION_MAP = {
   tools: "tools-section",
+  "tools-adoption": "tools-adoption-section",
   errors: "errors-section",
   models: "models-section",
   skills: "skills-section",
@@ -262,9 +305,11 @@ function initFilters() {
 }
 
 function initClientFilter() {
-  document.querySelectorAll('#sidebar input[name="client"]').forEach((radio) => {
-    radio.addEventListener("change", () => {
-      currentClient = radio.value;
+  document.querySelectorAll("#sidebar input[data-client]").forEach((cb) => {
+    cb.addEventListener("change", () => {
+      selectedClients = Array.from(
+        document.querySelectorAll("#sidebar input[data-client]:checked")
+      ).map((el) => el.dataset.client);
       loadDashboard();
     });
   });

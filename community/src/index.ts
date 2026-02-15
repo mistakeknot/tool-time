@@ -234,13 +234,17 @@ app.post("/v1/api/submit", async (c) => {
 app.get("/v1/api/stats", async (c) => {
   const clientFilter = c.req.query("client");
   const validClients = ["claude-code", "codex", "openclaw"];
-  const filterClient = clientFilter && validClients.includes(clientFilter) ? clientFilter : null;
+  const filterClients = clientFilter
+    ? clientFilter.split(",").filter((c) => validClients.includes(c))
+    : [];
 
   // Build WHERE clause fragments
   const baseWhere = "s.submitted_at >= datetime('now', '-7 days')";
-  const clientWhere = filterClient ? ` AND s.client = ?` : "";
+  const clientWhere = filterClients.length
+    ? ` AND s.client IN (${filterClients.map(() => "?").join(",")})`
+    : "";
   const bindClient = (stmt: ReturnType<D1Database["prepare"]>) =>
-    filterClient ? stmt.bind(filterClient) : stmt;
+    filterClients.length ? stmt.bind(...filterClients) : stmt;
 
   const tools = await bindClient(c.env.DB.prepare(
     `SELECT
@@ -248,7 +252,8 @@ app.get("/v1/api/stats", async (c) => {
        SUM(ts.calls) as total_calls,
        SUM(ts.errors) as total_errors,
        SUM(ts.rejections) as total_rejections,
-       COUNT(DISTINCT s.submission_token) as unique_submitters
+       COUNT(DISTINCT s.submission_token) as unique_submitters,
+       ROUND(CAST(SUM(ts.calls) AS FLOAT) / COUNT(DISTINCT s.submission_token), 1) as avg_calls_per_submitter
      FROM tool_stats ts
      JOIN submissions s ON s.id = ts.submission_id
      WHERE ${baseWhere}${clientWhere}
@@ -279,7 +284,8 @@ app.get("/v1/api/stats", async (c) => {
   const skills = await bindClient(c.env.DB.prepare(
     `SELECT ss.name,
             SUM(ss.calls) as total_calls,
-            COUNT(DISTINCT s.submission_token) as unique_submitters
+            COUNT(DISTINCT s.submission_token) as unique_submitters,
+            ROUND(CAST(SUM(ss.calls) AS FLOAT) / COUNT(DISTINCT s.submission_token), 1) as avg_calls_per_submitter
      FROM skill_stats ss
      JOIN submissions s ON s.id = ss.submission_id
      WHERE ${baseWhere}${clientWhere}
@@ -292,7 +298,8 @@ app.get("/v1/api/stats", async (c) => {
     `SELECT ms.name,
             SUM(ms.calls) as total_calls,
             SUM(ms.errors) as total_errors,
-            COUNT(DISTINCT s.submission_token) as unique_submitters
+            COUNT(DISTINCT s.submission_token) as unique_submitters,
+            ROUND(CAST(SUM(ms.calls) AS FLOAT) / COUNT(DISTINCT s.submission_token), 1) as avg_calls_per_submitter
      FROM mcp_server_stats ms
      JOIN submissions s ON s.id = ms.submission_id
      WHERE ${baseWhere}${clientWhere}

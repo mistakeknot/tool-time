@@ -1,0 +1,2 @@
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' cdn.jsdelivr.net static.cloudflareinsights.com; connect-src 'self' cdn.jsdelivr.net; style-src 'self'; img-src 'self' data:
