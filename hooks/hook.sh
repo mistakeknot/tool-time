@@ -70,7 +70,8 @@ LINE=$(jq -nc \
   --arg skill "$SKILL" \
   --arg file "$FILE_PATH" \
   --arg model "$MODEL" \
-  '{v:($v|tonumber), id:$id, ts:$ts, event:$event, tool:$tool, project:$project, error:$error}
+  --arg source "claude-code" \
+  '{v:($v|tonumber), id:$id, ts:$ts, event:$event, tool:$tool, project:$project, error:$error, source:$source}
    + (if $skill != "" then {skill:$skill} else {} end)
    + (if $file != "" then {file:$file} else {} end)
    + (if $model != "" then {model:$model} else {} end)')
@@ -100,7 +101,7 @@ if [ "$EVENT" = "PreToolUse" ] && [ "$TOOL" = "Task" ]; then
   # Detect multi-agent workflow via transcript keywords or marker file
   MULTI_AGENT=false
   if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
-    if tail -c 5000000 "$TRANSCRIPT" | grep 'deepen-plan\|plan_review\|plan-review\|workflows:review' >/dev/null 2>&1; then
+    if tail -c 5000000 "$TRANSCRIPT" | grep 'deepen-plan\|plan_review\|plan-review\|workflows:review\|flux-drive' >/dev/null 2>&1; then
       MULTI_AGENT=true
     fi
   fi

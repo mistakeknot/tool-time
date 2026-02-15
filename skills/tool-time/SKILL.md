@@ -7,6 +7,9 @@ triggers:
   - tool-time
   - show patterns
   - analyze tools
+  - deep analysis
+  - dashboard
+  - show charts
   - delete my data
   - remove my data
   - forget me
@@ -15,34 +18,111 @@ user_invocable: true
 
 # tool-time: Tool Usage Analysis
 
-You are analyzing 7 days of tool usage data for the current project. Your job is to find problems and offer to fix them — not narrate numbers.
+You are analyzing tool usage data to find problems and offer to fix them — not narrate numbers.
 
-## Data
+## Step 1: Gather Data
 
-Run `python3 $CLAUDE_PLUGIN_ROOT/summarize.py` then read `~/.claude/tool-time/stats.json`. After reading, run `python3 $CLAUDE_PLUGIN_ROOT/upload.py` to upload the latest stats (only sends if community sharing is enabled).
+Run both analysis scripts, then read the outputs:
 
-The file contains:
-- `total_events`: total tool calls in the period
-- `tools`: per-tool `{calls, errors, rejections}` — rejections are user denials, errors are tool failures
-- `edit_without_read_count`: how many times Edit was called on a file not previously Read in that session
+```bash
+python3 $CLAUDE_PLUGIN_ROOT/summarize.py
+python3 $CLAUDE_PLUGIN_ROOT/analyze.py --timezone America/Los_Angeles
+```
 
-## Analysis
+Then read both files:
+- `~/.claude/tool-time/stats.json` (7-day project-scoped stats)
+- `~/.claude/tool-time/analysis.json` (90-day deep analytics)
 
-Look for these signals (not an exhaustive list — use your judgment):
+After reading, run `python3 $CLAUDE_PLUGIN_ROOT/upload.py` to upload the latest stats (only sends if community sharing is enabled).
 
-- **Tools with error rates above ~10%** — what's failing and why?
-- **Tools with high rejection rates** — the agent is doing something the user doesn't want
-- **Edit-without-read > 0** — the agent is editing files it hasn't read, leading to blind edits
-- **Bash dominance (>50% of calls)** — but only a concern if the Bash calls are doing file reads/searches (cat, grep, find, head, tail) that dedicated tools handle better. Bash calls for git, test runners, script execution, and deployment are legitimate and should not be flagged.
+## Step 2: Auto-Detect Mode
+
+Check `analysis.json` field `event_count`:
+- **≥500 events**: Use **deep analysis** mode (this file's full instructions)
+- **<500 events**: Use **basic mode** — present only stats.json findings (skip deep analysis sections)
+- **<100 events**: Tell the user: "Only N events — need more sessions for meaningful analysis. Try again after a few more days of use."
+
+## Step 3: Dashboard Shortcut
+
+If the user's trigger matches "dashboard", "show charts", or "visual":
+- Skip text analysis
+- Run: `bash $CLAUDE_PLUGIN_ROOT/local-dashboard/serve.sh`
+- Print the URL and stop
+
+## Step 4: Deep Analysis (diagnostic-first order)
+
+Present findings in this priority order. Skip any section that has no actionable findings — never pad with filler.
+
+### 4a. Retry Patterns (most actionable)
+
+From `analysis.json → tool_chains.retry_patterns`:
+- Report tools with retries: "Edit retried 1.1x avg, max 3 in one session (14 sessions affected)"
+- If retries are high (avg >2), suggest CLAUDE.md rules to improve first-attempt success
+- If no retries: skip this section entirely (healthy signal, not worth mentioning)
+
+### 4b. Tool Chain Problems
+
+From `analysis.json → tool_chains.bigrams`:
+- Look for anti-patterns in transitions:
+  - `Read → Bash` (if Bash is doing cat/grep/find → should use Read/Grep/Glob)
+  - `Edit → Edit` same file (repeated failures → improve context in CLAUDE.md)
+  - High self-loop counts for any tool (indicates iteration/retry loops)
+- Report the top 3-5 most interesting transitions with counts
+- If bigrams look healthy (diverse, no loops): skip
+
+### 4c. Session Classification
+
+From `analysis.json → sessions.classifications`:
+- Report the breakdown: "60% building, 20% debugging, 10% exploring..."
+- Only flag if the mix is surprising:
+  - Debugging >30% → "A third of sessions are debugging — check for recurring error patterns"
+  - Exploring >40% → "Lots of exploration — might benefit from better AGENTS.md docs"
+  - Planning very low → normal, don't flag
+- If the mix is unremarkable: one sentence summary, move on
+
+### 4d. Source Comparison (only if multiple sources)
+
+From `analysis.json → by_source`:
+- If only 1 source (or only "unknown"): skip entirely
+- If multiple: compare error rates, avg tools/session across clients
+- Flag significant differences (>2x): "Codex sessions have 2.3x higher error rate — check AGENTS.md for Codex-specific instructions"
+
+### 4e. Time Patterns (only if revealing)
+
+From `analysis.json → time_patterns`:
+- Only report if there's a clear signal:
+  - Error rate at `most_error_prone_hour` is >2x the average → "Error rate spikes 3x at 11pm — you may be tired"
+  - Extreme concentration (>80% of events in 4 hours) → notable but not actionable
+- If patterns are unremarkable: skip
+
+### 4f. Trends (week-over-week)
+
+From `analysis.json → trends`:
+- Report meaningful changes:
+  - Error rate trend (improving/worsening over last 4 weeks)
+  - Tool mix shifting (e.g., "Bash usage dropped from 60% to 40% — good, using dedicated tools more")
+  - Session count trends (ramping up/down)
+- If no clear trend: skip
+
+## Step 5: Basic Stats Signals
+
+Also check `stats.json` for the standard signals (these apply in both modes):
+
+- **Error rates above ~10%** — what's failing and why?
+- **High rejection rates** — the agent is doing something the user doesn't want
+- **Edit-without-read > 0** — the agent is editing files it hasn't read
+- **Bash dominance (>50%)** — only flag if Bash is doing file reads/searches. Bash for git, tests, deploy is fine.
 - **Low tool diversity** — are available tools being underutilized?
 
-Then read the project's CLAUDE.md (if it exists):
+## Step 6: CLAUDE.md/AGENTS.md Review
+
+Read the project's CLAUDE.md (if it exists):
 - Does it already address the problems you found? If so, the rules aren't working.
 - Is it missing guidance that would prevent the patterns you see?
 
 Optionally check AGENTS.md for similar gaps.
 
-## Output
+## Step 7: Output
 
 Present findings as a short bulleted list. For each finding:
 - What the data shows (concrete numbers)
@@ -52,6 +132,9 @@ Present findings as a short bulleted list. For each finding:
 Then offer to apply fixes. Use Edit to update CLAUDE.md or AGENTS.md directly, with user approval. Don't just suggest — propose the exact text.
 
 If the data looks healthy, say so briefly and stop. Don't invent problems.
+
+**Dashboard prompt** (always include at the end if in deep analysis mode):
+"For visual exploration (Sankey diagram, heatmap, trend charts), run: `bash $CLAUDE_PLUGIN_ROOT/local-dashboard/serve.sh`"
 
 ## Community Comparison (if enabled)
 
@@ -99,6 +182,6 @@ If the user asks to delete their community data (triggers: "delete my data", "re
 1. Read `~/.claude/tool-time/config.json` to get the `submission_token`
 2. If no token exists, tell the user they have no community data to delete
 3. Show the user their token and confirm they want to proceed
-4. Run: `curl -s -X DELETE "https://tool-time-api.mistakeknot.workers.dev/v1/api/user/<token>"`
+4. Run: `curl -s -X POST "https://tool-time-api.mistakeknot.workers.dev/v1/api/user/delete" -H "Content-Type: application/json" -d '{"submission_token": "<token>"}'`
 5. Report the result
 6. Offer to also set `community_sharing` to `false` in config.json to stop future uploads
