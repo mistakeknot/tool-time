@@ -1,5 +1,8 @@
 # tool-time Roadmap
 
+**Version:** 0.3.1
+**Last updated:** 2026-02-14
+
 ## v0.1 — Prove Value
 
 Passive event collection + suggest-only analysis. No MCP, no CLI, no config.
