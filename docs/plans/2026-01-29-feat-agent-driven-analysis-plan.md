@@ -103,7 +103,7 @@ Same, but run `backfill.py` first (Codex has no hooks).
 
 - Delete `optimize.py`
 - Delete references to `pending-suggestions.json`
-- Update `docs/ROADMAP.md`
+- Update `docs/roadmap.md`
 
 ## Deferred
 

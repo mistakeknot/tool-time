@@ -33,24 +33,30 @@ Replace hardcoded heuristics with agent reasoning. Code prepares data; agent ana
 - [x] `optimize.py` and `pending-suggestions.json` removed
 - [x] `test_summarize.py` with 18 tests
 - [x] Marketplace listing + plugin skills published
+- [TTM-N1] **Feature roadmap reset for token bands** — add `--project`, `--global`, and `--days` CLI slices.
 
-## v0.3 — Deferred
+## P2 — Usage and trend intelligence
 
-Add when proven useful:
+- [TTM-P1] **Segmented query slices** — add `--project`, `--global`, `--days` CLI filters.
+- [TTM-P2] **Trend comparison** — support previous-period comparisons for session analytics.
 
-- [ ] `--project`, `--global`, `--days` CLI flags
-- [ ] Trends / previous period comparison
-- [ ] Installed skills scanner (compare available vs. used)
-- [ ] MCP resource (`tool-time://stats`)
-- [ ] Incremental transcript parsing
-- [ ] Per-project storage
-- [ ] Retention policy
+## P3 — Deferred
 
-## Deferred Indefinitely
+- [TTM-P3] **Installed skills usage matrix** — surface available-vs-used tool/skill mismatch.
+- [TTM-P4] **MCP resource endpoint** — expose `tool-time://stats` as a runtime resource.
+- [TTM-P5] **Incremental transcript parsing** — process deltas to avoid full reingest costs.
+- [TTM-P6] **Per-project storage** — isolate analytics by project namespace.
+- [TTM-P7] **Retention controls** — add configurable retention and summarization windows.
 
-| Feature | Condition to Reconsider |
-|---------|------------------------|
-| ML-based pattern mining | Months of data + clear patterns agent reasoning misses |
-| Cross-project insights | Multiple projects with enough data to compare |
-| Auto-apply CLAUDE.md changes | Agent-driven suggestions prove consistently good |
-| Tool output logging | Only if users explicitly opt in (privacy default: off) |
+## P4 — Deferred indefinitely
+
+- [TTM-P8] **ML-based pattern mining** — if months of data reveal stable high-signal classes.
+- [TTM-P9] **Cross-project insights** — once data across projects supports comparative learning.
+- [TTM-P10] **Auto-apply policy patches** — allow automated CLAUDE.md updates only after high-confidence suggestions.
+- [TTM-P11] **Tool output logging** — enable only with explicit opt-in to preserve defaults.
+
+## From Interverse Roadmap
+
+Items from the [Interverse roadmap](../../../docs/roadmap.json) that involve this module:
+
+No monorepo-level items currently reference this module.
