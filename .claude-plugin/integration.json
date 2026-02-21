@@ -1,0 +1,16 @@
+{
+  "ecosystem": "interverse",
+  "interbase_min_version": "1.0.0",
+  "ecosystem_only": false,
+  "standalone_features": [
+    "Tool usage event collection and analytics",
+    "Usage pattern dashboards"
+  ],
+  "integrated_features": [
+    { "feature": "Cross-reference with interstat token metrics", "requires": "interstat" }
+  ],
+  "companions": {
+    "recommended": [],
+    "optional": ["interstat"]
+  }
+}
