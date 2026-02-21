@@ -2,12 +2,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "*",
+        "matcher": "Task",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/hook.sh\"",
-            "timeout": 5
+            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/agent-output-redirect.sh\"",
+            "timeout": 10
           }
         ]
       }
