@@ -1,6 +1,6 @@
 {
   "name": "tool-time",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "description": "Tool usage analytics for Claude Code. Tracks tool patterns via hooks, detects inefficiencies, and offers community comparison with anonymized data.",
   "author": {
     "name": "mistakeknot"
