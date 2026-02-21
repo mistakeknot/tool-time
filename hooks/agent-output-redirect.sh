@@ -21,11 +21,17 @@ PROMPT=$(echo "$INPUT" | jq -r '.tool_input.prompt // ""')
 TASK_DESC=$(echo "$INPUT" | jq -r '.tool_input.description // ""')
 ORIGINAL_INPUT=$(echo "$INPUT" | jq '.tool_input')
 
-# Detect multi-agent workflow via transcript keywords or marker file
+# Detect multi-agent workflow via transcript keywords or marker file.
+# Cache result per session in /tmp to avoid re-scanning 5MB transcript on every Task call.
 MULTI_AGENT=false
-if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+SID=$(echo "$INPUT" | jq -r '.session_id // ""')
+CACHE_FLAG="/tmp/tool-time-multiagent-${SID}"
+if [ -f "$CACHE_FLAG" ]; then
+  MULTI_AGENT=true
+elif [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   if tail -c 5000000 "$TRANSCRIPT" | grep 'deepen-plan\|plan_review\|plan-review\|workflows:review\|flux-drive' >/dev/null 2>&1; then
     MULTI_AGENT=true
+    touch "$CACHE_FLAG" 2>/dev/null || true
   fi
 fi
 if [ -f "$CWD/docs/research/.active" ]; then
