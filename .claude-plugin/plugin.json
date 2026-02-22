@@ -13,5 +13,10 @@
     "usage",
     "hooks",
     "community"
+  ],
+  "hooks": "./hooks/hooks.json",
+  "skills": [
+    "./skills/tool-time",
+    "./skills/tool-time-codex"
   ]
 }
