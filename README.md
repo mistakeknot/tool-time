@@ -2,7 +2,7 @@
 
 Tool usage analytics for Claude Code, Codex CLI, and OpenClaw.
 
-## What This Does
+## What this does
 
 Hooks capture every tool call in your Claude Code sessions. Transcript parsers extract tool usage from Codex CLI and OpenClaw sessions. A Python script aggregates 7 days of stats. An AI agent reads those stats, spots patterns (high error rates, edit-without-read, Bash overuse), checks your CLAUDE.md for gaps, and proposes concrete fixes.
 
@@ -30,15 +30,15 @@ Then install the plugin:
 
 The agent regenerates your stats, analyzes tool usage patterns for the current project, flags issues, reads your CLAUDE.md/AGENTS.md, and proposes specific edits. It also recommends relevant skills from [playbooks.com](https://playbooks.com) based on your project language.
 
-### What Gets Flagged
+### What gets flagged
 
-- **High error rates** — tools failing 10%+ of the time
-- **High rejection rates** — tools the user frequently denies
-- **Edit-without-read** — editing files that weren't read first (a surprisingly common source of bugs)
-- **Bash dominance** — Bash >50% of calls, but only when Bash is doing file reads (cat, grep, find). Git, test runners, and deployment scripts are legitimate Bash usage.
-- **Low tool diversity** — underutilizing available tools
+- **High error rates**: tools failing 10%+ of the time
+- **High rejection rates**: tools the user frequently denies
+- **Edit-without-read**: editing files that weren't read first (a surprisingly common source of bugs)
+- **Bash dominance**: Bash >50% of calls, but only when Bash is doing file reads (cat, grep, find). Git, test runners, and deployment scripts are legitimate Bash usage.
+- **Low tool diversity**: underutilizing available tools
 
-## How It Works
+## How it works
 
 ```
 hooks (PreToolUse, PostToolUse, SessionStart, SessionEnd)
@@ -60,9 +60,9 @@ summarize.py                        ← pure data aggregation (7-day window, per
        Cloudflare Worker + D1       ← community dashboard
 ```
 
-`summarize.py` is pure data preparation — no opinions, no thresholds. The agent does the analysis. This split keeps the data pipeline honest and the recommendations adaptable.
+`summarize.py` is pure data preparation: no opinions, no thresholds. The agent does the analysis. This split keeps the data pipeline honest and the recommendations adaptable.
 
-## Community Sharing (Opt-In)
+## Community sharing (Opt-In)
 
 Enable in `~/.claude/tool-time/config.json`:
 
@@ -74,9 +74,9 @@ Enable in `~/.claude/tool-time/config.json`:
 
 **What's NOT shared**: file paths, project names, error messages, skill arguments.
 
-**GDPR deletion**: `/tool-time delete my data` — looks up your token, confirms, deletes all server-side data, offers to disable future uploads.
+**GDPR deletion**: `/tool-time delete my data`: looks up your token, confirms, deletes all server-side data, offers to disable future uploads.
 
-## Codex CLI + OpenClaw Support
+## Codex CLI + openClaw support
 
 Codex CLI doesn't support hooks, so `backfill.py` parses historical session transcripts from `~/.codex/sessions/`. OpenClaw transcripts are parsed from `~/.openclaw/agents/`, `~/.moltbot/agents/`, and `~/.clawdbot/agents/` (the app was rebranded multiple times; sessions are deduplicated across directories).
 
