@@ -10,6 +10,14 @@ Optionally, share anonymized stats to a community dashboard at [tool-time.org](h
 
 ## Installation
 
+First, add the [interagency marketplace](https://github.com/mistakeknot/interagency-marketplace) (one-time setup):
+
+```bash
+/plugin marketplace add mistakeknot/interagency-marketplace
+```
+
+Then install the plugin:
+
 ```bash
 /plugin install tool-time
 ```
