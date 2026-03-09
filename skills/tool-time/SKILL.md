@@ -35,6 +35,24 @@ Then read both files:
 
 After reading, run `python3 $CLAUDE_PLUGIN_ROOT/upload.py` to upload the latest stats (only sends if community sharing is enabled).
 
+## Step 1b: Cross-Agent Tool Analytics (optional)
+
+If cass is available, gather cross-agent analytics for a broader perspective:
+
+```bash
+if command -v cass > /dev/null 2>&1; then
+    cass analytics tools --days 7 --json 2>/dev/null > ~/.claude/tool-time/cass-tools.json || true
+    cass analytics models --days 7 --json 2>/dev/null > ~/.claude/tool-time/cass-models.json || true
+fi
+```
+
+If cass data files exist, read them and include in your analysis:
+- Per-tool invocation counts across ALL agents (not just Claude Code)
+- Model distribution across agents (which models are used most)
+- Compare tool usage patterns between agents (e.g., Codex uses different tools than Claude Code)
+
+This is supplementary — skip if cass is not installed or data is empty.
+
 ## Step 2: Auto-Detect Mode
 
 Check `analysis.json` field `event_count`:
