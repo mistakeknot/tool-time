@@ -1,5 +1,5 @@
 ---
-name: tool-time
+name: tool-time-codex
 description: Analyze tool usage patterns and suggest improvements to your workflow (Codex CLI)
 triggers:
   - tool stats
