@@ -25,8 +25,8 @@ FIELDS=$(echo "$INPUT" | jq -r '
     (.model // "")
   ] | .[]')
 
-# Read into array (preserves values with spaces)
-mapfile -t F <<< "$FIELDS"
+# Read into array (preserves values with spaces; bash 3.2 compatible)
+IFS=$'\n' read -r -d '' -a F <<< "$FIELDS" || true
 EVENT="${F[0]:-}"
 TOOL="${F[1]:-}"
 SESSION_ID="${F[2]:-}"
