@@ -2,7 +2,8 @@
 # tool-time event logger
 # Reads hook JSON from stdin, appends one JSONL line to events.jsonl
 # On SessionEnd, runs summarize.py then upload.py (background)
-set -euo pipefail
+set -uo pipefail
+trap 'exit 0' ERR
 
 DATA_DIR="$HOME/.claude/tool-time"
 EVENTS_FILE="$DATA_DIR/events.jsonl"

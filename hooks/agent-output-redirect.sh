@@ -5,7 +5,8 @@
 # instructions to prevent context exhaustion.
 # NOTE: Must run as the LAST PreToolUse hook due to Claude Code bug #15897:
 # updatedInput from earlier hooks gets silently overwritten by later hooks.
-set -euo pipefail
+set -uo pipefail
+trap 'exit 0' ERR
 
 INPUT=$(cat)
 
