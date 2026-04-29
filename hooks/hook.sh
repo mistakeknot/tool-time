@@ -14,6 +14,15 @@ mkdir -p "$DATA_DIR"
 # Read stdin once
 INPUT=$(cat)
 
+# Skip non-tool events early — SessionStart/SessionEnd/etc. have no tool to log
+# and tripping the SEQ-file logic on those caused stderr noise (saves ~789b
+# of session-prefix attachment per session).
+EVENT_NAME=$(echo "$INPUT" | jq -r '.hook_event_name // ""')
+case "$EVENT_NAME" in
+  PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop) ;;
+  *) exit 0 ;;
+esac
+
 # Extract all fields in a single jq call (newline-delimited for safe parsing)
 FIELDS=$(echo "$INPUT" | jq -r '
   [
