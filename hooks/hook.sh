@@ -14,10 +14,24 @@ mkdir -p "$DATA_DIR"
 # Read stdin once
 INPUT=$(cat)
 
-# Skip non-tool events early — SessionStart/SessionEnd/etc. have no tool to log
+EVENT_NAME=$(echo "$INPUT" | jq -r '.hook_event_name // ""')
+
+# SessionEnd has no tool to log — handle it specially: refresh stats and queue
+# the upload, then exit before the per-tool JSONL write below. Without this
+# branch, SessionEnd would either be dropped (pre-sylveste-63ha bug) or
+# pollute events.jsonl with empty-tool entries.
+if [ "$EVENT_NAME" = "SessionEnd" ]; then
+  SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""')
+  [ -n "$SESSION_ID" ] && rm -f "$DATA_DIR/.seq-${SESSION_ID}"
+  if python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null; then
+    python3 "$PLUGIN_ROOT/upload.py" </dev/null >/dev/null 2>&1 &
+  fi
+  exit 0
+fi
+
+# Skip other non-tool events early — SessionStart/etc. have no tool to log
 # and tripping the SEQ-file logic on those caused stderr noise (saves ~789b
 # of session-prefix attachment per session).
-EVENT_NAME=$(echo "$INPUT" | jq -r '.hook_event_name // ""')
 case "$EVENT_NAME" in
   PreToolUse|PostToolUse|UserPromptSubmit|Stop|SubagentStop) ;;
   *) exit 0 ;;
@@ -89,10 +103,4 @@ LINE=$(jq -nc \
 # Atomic single-line write (under PIPE_BUF)
 echo "$LINE" >> "$EVENTS_FILE"
 
-# On SessionEnd, run optimize.py and clean up seq file
-if [ "$EVENT" = "SessionEnd" ]; then
-  rm -f "$SEQ_FILE"
-  if python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null; then
-    python3 "$PLUGIN_ROOT/upload.py" </dev/null >/dev/null 2>&1 &
-  fi
-fi
+# (SessionEnd is handled by the early-return branch above — sylveste-63ha)
