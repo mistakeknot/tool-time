@@ -7,10 +7,18 @@
     "Usage pattern dashboards"
   ],
   "integrated_features": [
-    { "feature": "Cross-reference with interstat token metrics", "requires": "interstat" }
+    {
+      "feature": "Cross-reference with interstat token metrics",
+      "requires": "interstat"
+    }
   ],
   "companions": {
-    "recommended": [],
-    "optional": ["interstat"]
+    "recommended": [
+      "intercheck",
+      "interspect"
+    ],
+    "optional": [
+      "interstat"
+    ]
   }
 }

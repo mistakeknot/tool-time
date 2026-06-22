@@ -17,9 +17,5 @@
   "skills": [
     "./skills/tool-time",
     "./skills/tool-time-codex"
-  ],
-  "peerDependencies": [
-    "intercheck",
-    "interspect"
   ]
 }
