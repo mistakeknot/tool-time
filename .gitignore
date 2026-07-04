@@ -3,3 +3,8 @@ __pycache__/
 .env
 
 .beads/
+
+# agent-runtime db artifacts
+.clavain/**/*.db-shm
+.clavain/**/*.db-wal
+.clavain/intercore.db*
