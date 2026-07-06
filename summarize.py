@@ -9,6 +9,7 @@ for an agent to reason about.
 import json
 import os
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,16 @@ def is_user_rejection(error: str | None) -> bool:
     if not error:
         return False
     return any(error.startswith(prefix) for prefix in USER_REJECTION_PREFIXES)
+
+
+def parse_event_ts(ts_raw: str | None) -> datetime | None:
+    """Parse an event timestamp, returning None if missing or malformed."""
+    if not ts_raw:
+        return None
+    try:
+        return datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def load_events(
@@ -92,6 +103,8 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
     mcp_server_stats: dict[str, dict[str, int]] = defaultdict(
         lambda: {"calls": 0, "errors": 0}
     )
+    tool_last_used: dict[str, datetime] = {}
+    mcp_last_used: dict[str, datetime] = {}
 
     # Group file ops by session for edit-without-read detection
     session_file_ops: dict[str, list[tuple[str, str | None]]] = defaultdict(list)
@@ -108,26 +121,44 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
         if source:
             source_counts[source] += 1
 
-        # Count calls from PreToolUse or ToolUse events
-        if event_type in ("PreToolUse", "ToolUse"):
+        # Calls are counted at PostToolUse (not PreToolUse) to avoid
+        # double-counting if PreToolUse logging is ever added
+        if event_type in ("PostToolUse", "ToolUse"):
             tool_counts[tool] += 1
             file_path = ev.get("file")
+
+            # Skills — a historical hook bug wrote file paths into the
+            # "skill" field. A path is not a skill: never count it as one
+            # (path-like values would leak private paths downstream). When
+            # such an event has no "file" key, the value IS the file path
+            # the old hook misplaced — recover it for the edit-without-read
+            # logic below.
+            skill_name = ev.get("skill")
+            if skill_name:
+                if "/" in skill_name:
+                    if "file" not in ev:
+                        file_path = skill_name
+                else:
+                    skill_counts[skill_name] += 1
+
             session_id = ev["id"].rsplit("-", 1)[0]
             session_file_ops[session_id].append((tool, file_path))
 
-            # Skills
-            skill_name = ev.get("skill")
-            if skill_name:
-                skill_counts[skill_name] += 1
+            ts = parse_event_ts(ev.get("ts"))
+            if ts is not None and (tool not in tool_last_used or ts > tool_last_used[tool]):
+                tool_last_used[tool] = ts
 
             # MCP servers — parse from mcp__<server>__<tool> pattern
+            server = None
             if tool.startswith("mcp__"):
                 parts = tool.split("__", 2)
                 if len(parts) >= 3 and parts[1]:
-                    mcp_server_stats[parts[1]]["calls"] += 1
+                    server = parts[1]
+                    mcp_server_stats[server]["calls"] += 1
+                    if ts is not None and (server not in mcp_last_used or ts > mcp_last_used[server]):
+                        mcp_last_used[server] = ts
 
-        # Count errors from PostToolUse or ToolUse events
-        if event_type in ("PostToolUse", "ToolUse"):
+            # Errors and rejections ride on the same event
             error = ev.get("error")
             if error is not None:
                 if is_user_rejection(error):
@@ -135,10 +166,8 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
                 else:
                     tool_errors[tool] += 1
                     # Track MCP server errors
-                    if tool.startswith("mcp__"):
-                        parts = tool.split("__", 2)
-                        if len(parts) >= 3 and parts[1]:
-                            mcp_server_stats[parts[1]]["errors"] += 1
+                    if server:
+                        mcp_server_stats[server]["errors"] += 1
 
     # Session-scoped edit-without-read
     edit_without_read_count = 0
@@ -154,12 +183,14 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
                     edit_without_read_count += 1
 
     # Build per-tool stats
-    tools: dict[str, dict[str, int]] = {}
+    tools: dict[str, dict[str, Any]] = {}
     for tool in sorted(tool_counts, key=tool_counts.get, reverse=True):
+        last = tool_last_used.get(tool)
         tools[tool] = {
             "calls": tool_counts[tool],
             "errors": tool_errors.get(tool, 0),
             "rejections": tool_rejections.get(tool, 0),
+            "last_used": last.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if last else None,
         }
 
     # Build skill stats
@@ -168,9 +199,11 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
         skills[name] = {"calls": skill_counts[name]}
 
     # Build MCP server stats (only include servers with actual usage)
-    mcp_servers: dict[str, dict[str, int]] = {}
+    mcp_servers: dict[str, dict[str, Any]] = {}
     for name in sorted(mcp_server_stats, key=lambda n: mcp_server_stats[n]["calls"], reverse=True):
+        last = mcp_last_used.get(name)
         mcp_servers[name] = dict(mcp_server_stats[name])
+        mcp_servers[name]["last_used"] = last.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if last else None
 
     # Most common model/client, or null
     model = model_counts.most_common(1)[0][0] if model_counts else None
@@ -194,7 +227,21 @@ def main() -> None:
     events = load_events(project=project)
     stats = compute_tool_statistics(events)
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    STATS_FILE.write_text(json.dumps(stats, indent=2) + "\n")
+    # Atomic write: parallel readers (maintain.py, evidence bridges) must
+    # never see a torn stats.json — write a tempfile in the same dir, then
+    # swap it into place with os.replace.
+    payload = json.dumps(stats, indent=2) + "\n"
+    fd, tmp_name = tempfile.mkstemp(dir=DATA_DIR, prefix=".stats-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(payload)
+        os.replace(tmp_name, STATS_FILE)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
     print(str(STATS_FILE))
 
 

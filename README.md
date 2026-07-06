@@ -30,6 +30,12 @@ Then install the plugin:
 
 The agent regenerates your stats, analyzes tool usage patterns for the current project, flags issues, reads your CLAUDE.md/AGENTS.md, and proposes specific edits. It also recommends relevant skills from [playbooks.com](https://playbooks.com) based on your project language.
 
+```
+/tool-time rig
+```
+
+Rig audit mode: joins your usage data against every registered MCP server and enabled plugin (global config, project config, plugin cache), plus a live process snapshot — then recommends what to disable. Surfaces zero-use servers with their RAM cost, duplicate registrations (the same server reachable two ways), and idle plugins. `rig.py` collects the data; the agent makes the recommendations and asks before touching any config.
+
 ### What gets flagged
 
 - **High error rates**: tools failing 10%+ of the time
@@ -37,6 +43,11 @@ The agent regenerates your stats, analyzes tool usage patterns for the current p
 - **Edit-without-read**: editing files that weren't read first (a surprisingly common source of bugs)
 - **Bash dominance**: Bash >50% of calls, but only when Bash is doing file reads (cat, grep, find). Git, test runners, and deployment scripts are legitimate Bash usage.
 - **Low tool diversity**: underutilizing available tools
+- **Rig waste** (rig mode): zero-use MCP servers still spawning processes per session, duplicate registrations, idle plugins
+
+### Proactive digest
+
+You don't have to remember to run `/tool-time`. On SessionEnd the pipeline refreshes stats and writes a one-to-two-line digest (`maintain.py`); on SessionStart the hook surfaces it as session context — but only when something is notable (pipeline broken, error-rate spike, several unused servers). Healthy rig = silent digest.
 
 ## How it works
 
@@ -46,21 +57,29 @@ hooks (PreToolUse, PostToolUse, SessionStart, SessionEnd)
   ▼
 ~/.claude/tool-time/events.jsonl    ← one JSONL line per event
   │
-  ▼
-summarize.py                        ← pure data aggregation (7-day window, per-project)
+  ├──▶ summarize.py                 ← pure data aggregation (7-day window, per-project)
+  │      │
+  │      ▼
+  │    ~/.claude/tool-time/stats.json   ← calls, errors, rejections, last_used per tool
+  │      │
+  │      ├──▶ skill (agent analysis)    ← reads stats + CLAUDE.md, proposes fixes
+  │      │
+  │      └──▶ upload.py (opt-in)        ← anonymized submission to community API
+  │             │
+  │             ▼
+  │           Cloudflare Worker + D1    ← community dashboard
   │
-  ▼
-~/.claude/tool-time/stats.json      ← calls, errors, rejections per tool
+  ├──▶ rig.py (on demand)           ← joins usage × MCP/plugin registrations × ps → rig.json
   │
-  ├──▶ skill (agent analysis)       ← reads stats + CLAUDE.md, proposes fixes
-  │
-  └──▶ upload.py (opt-in)           ← anonymized submission to community API
+  └──▶ maintain.py (SessionEnd)     ← log rotation, seq GC, writes digest.txt
          │
          ▼
-       Cloudflare Worker + D1       ← community dashboard
+       digest.txt ──▶ SessionStart hook surfaces it (only when notable)
 ```
 
-`summarize.py` is pure data preparation: no opinions, no thresholds. The agent does the analysis. This split keeps the data pipeline honest and the recommendations adaptable.
+`summarize.py` and `rig.py` are pure data preparation: no opinions, no thresholds. The agent does the analysis. This split keeps the data pipeline honest and the recommendations adaptable.
+
+Known coverage limit: hooks don't fire for tool calls made inside subagents, so subagent-heavy usage undercounts in events.jsonl. The rig-audit skill cross-checks transcripts before recommending removals.
 
 ## Community sharing (Opt-In)
 

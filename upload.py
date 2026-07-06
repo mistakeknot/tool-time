@@ -56,7 +56,9 @@ def anonymize(stats: dict, token: str) -> dict:
     - tools: {name: {calls, errors, rejections}} (names are public)
     - edit_without_read (count)
     - model (public model name)
-    - skills: {name: calls} (public skill identifiers)
+    - skills: {name: calls} (public skill identifiers; path-like names
+      containing '/' are dropped — defense in depth against a historical
+      hook bug that wrote file paths into the skill field)
     - mcp_servers: {name: {calls, errors}} (parsed from tool name prefix)
     - installed_plugins: [name, ...] (public plugin identifiers)
 
@@ -86,6 +88,7 @@ def anonymize(stats: dict, token: str) -> dict:
         "skills": {
             name: s.get("calls", 0)
             for name, s in stats.get("skills", {}).items()
+            if "/" not in name
         },
         "mcp_servers": {
             name: {"calls": m.get("calls", 0), "errors": m.get("errors", 0)}

@@ -2,7 +2,9 @@
 """Tests for summarize.py."""
 
 import json
+import os
 import tempfile
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -13,13 +15,14 @@ from summarize import (
     compute_tool_statistics,
     is_user_rejection,
     load_events,
+    main as summarize_main,
     scan_installed_plugins,
 )
 
 
 def _make_event(
     tool: str,
-    event_type: str = "ToolUse",
+    event_type: str = "PostToolUse",
     project: str = "/test/project",
     error: str | None = None,
     file: str | None = None,
@@ -173,8 +176,8 @@ class TestComputeToolStatistics:
         # Should be parseable ISO format
         datetime.fromisoformat(stats["generated"].replace("Z", "+00:00"))
 
-    def test_post_tool_use_errors_counted(self):
-        """PostToolUse events should count errors even though they don't count calls."""
+    def test_pre_tool_use_not_counted_as_call(self):
+        """Calls count at PostToolUse — a Pre+Post pair must count once."""
         events = [
             _make_event("Edit", event_type="PreToolUse", seq=1),
             _make_event("Edit", event_type="PostToolUse", error="file not found", seq=2),
@@ -182,6 +185,21 @@ class TestComputeToolStatistics:
         stats = compute_tool_statistics(events)
         assert stats["tools"]["Edit"]["calls"] == 1
         assert stats["tools"]["Edit"]["errors"] == 1
+
+    def test_post_tool_use_only_stream_counts(self):
+        """Regression: production logs contain ONLY PostToolUse events for
+        tools — aggregates must be non-empty for such a stream."""
+        events = [
+            _make_event("Read", event_type="PostToolUse", seq=1),
+            _make_event("Bash", event_type="PostToolUse", seq=2),
+            _make_event("Task", event_type="PostToolUse", skill="clavain:sprint", seq=3),
+            _make_event("mcp__slack__send", event_type="PostToolUse", seq=4),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["tools"]["Read"]["calls"] == 1
+        assert stats["tools"]["Bash"]["calls"] == 1
+        assert stats["skills"]["clavain:sprint"]["calls"] == 1
+        assert stats["mcp_servers"]["slack"]["calls"] == 1
 
     def test_empty_stats_have_new_keys(self):
         stats = compute_tool_statistics([])
@@ -220,13 +238,74 @@ class TestSkillAggregation:
         assert names == ["beta", "alpha"]
 
     def test_skill_only_counted_on_call_events(self):
-        """PostToolUse events should not count skill invocations."""
+        """Skills count at PostToolUse only — a Pre+Post pair counts once."""
         events = [
             _make_event("Task", event_type="PreToolUse", skill="foo", seq=1),
             _make_event("Task", event_type="PostToolUse", skill="foo", seq=2),
         ]
         stats = compute_tool_statistics(events)
         assert stats["skills"]["foo"]["calls"] == 1
+
+
+class TestPathLikeSkillValues:
+    """Historical hook bug: the "skill" field frequently contains absolute
+    file paths. Paths must never be counted as skills (privacy: they'd
+    flow into stats.json and on to the community upload), but when the
+    event has no "file" key the path is recovered as the file for the
+    edit-without-read logic."""
+
+    def test_path_like_skill_not_counted_as_skill(self):
+        events = [
+            _make_event("Read", skill="/Users/sma/projects/secret/file.py", seq=1),
+            _make_event("Edit", skill="/Users/sma/projects/secret/file.py", seq=2),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["skills"] == {}
+
+    def test_relative_path_skill_not_counted(self):
+        events = [
+            _make_event("Read", skill="src/lib/thing.ts", seq=1),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["skills"] == {}
+
+    def test_real_skills_still_counted_alongside_path_values(self):
+        events = [
+            _make_event("Task", skill="clavain:sprint", seq=1),
+            _make_event("Read", skill="/Users/sma/projects/foo/bar.py", seq=2),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["skills"] == {"clavain:sprint": {"calls": 1}}
+
+    def test_path_skill_recovered_as_file_for_edit_without_read(self):
+        """Data recovery on pre-fix events: the misplaced path is the file.
+        Session s1 reads then edits the file (OK); session s2 edits it
+        without reading (flagged)."""
+        path = "/Users/sma/projects/foo/bar.py"
+        events = [
+            _make_event("Read", skill=path, session_id="s1", seq=1),
+            _make_event("Edit", skill=path, session_id="s1", seq=2),
+            _make_event("Edit", skill=path, session_id="s2", seq=1),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["edit_without_read_count"] == 1
+        assert stats["skills"] == {}
+
+    def test_path_skill_does_not_override_real_file_key(self):
+        """When the event carries a real "file" key, that wins — the
+        path-like skill value is not used for edit-without-read."""
+        events = [
+            _make_event("Read", file="/real.py", session_id="s1", seq=1),
+            _make_event(
+                "Edit", file="/real.py",
+                skill="/Users/sma/projects/other.py",
+                session_id="s1", seq=2,
+            ),
+        ]
+        stats = compute_tool_statistics(events)
+        # If the skill path overrode the file key, the Edit would target
+        # an unread file and be flagged.
+        assert stats["edit_without_read_count"] == 0
 
 
 class TestMcpServerAggregation:
@@ -285,6 +364,30 @@ class TestMcpServerAggregation:
         assert names == ["beta", "alpha"]
 
 
+class TestLastUsed:
+    def test_tool_last_used_is_max_ts(self):
+        t1 = datetime(2026, 7, 1, 10, 0, 0, tzinfo=timezone.utc)
+        t2 = datetime(2026, 7, 3, 15, 30, 0, tzinfo=timezone.utc)
+        events = [
+            _make_event("Read", seq=1, ts=t2),
+            _make_event("Read", seq=2, ts=t1),
+        ]
+        stats = compute_tool_statistics(events)
+        assert stats["tools"]["Read"]["last_used"] == "2026-07-03T15:30:00Z"
+
+    def test_mcp_server_last_used(self):
+        t1 = datetime(2026, 7, 2, 9, 0, 0, tzinfo=timezone.utc)
+        events = [_make_event("mcp__slack__send", seq=1, ts=t1)]
+        stats = compute_tool_statistics(events)
+        assert stats["mcp_servers"]["slack"]["last_used"] == "2026-07-02T09:00:00Z"
+
+    def test_missing_ts_gives_null_last_used(self):
+        ev = _make_event("Bash", seq=1)
+        del ev["ts"]
+        stats = compute_tool_statistics([ev])
+        assert stats["tools"]["Bash"]["last_used"] is None
+
+
 class TestScanInstalledPlugins:
     def test_reads_enabled_plugins(self, tmp_path):
         settings = tmp_path / "settings.json"
@@ -327,3 +430,61 @@ class TestScanInstalledPlugins:
         settings.write_text(json.dumps({"other_key": "value"}))
         result = scan_installed_plugins(settings_file=settings)
         assert result == []
+
+
+class TestAtomicStatsWrite:
+    """stats.json is read in parallel (maintain.py, the interspect
+    evidence bridge) — main() must swap a fully-written tempfile into
+    place so a reader can never see a torn file."""
+
+    def _run_main(self, data_dir: Path, replace_side_effect=None):
+        events_file = data_dir / "events.jsonl"
+        _write_events([_make_event("Read", project="/test/project")], events_file)
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch("summarize.DATA_DIR", data_dir))
+            stack.enter_context(
+                mock.patch("summarize.STATS_FILE", data_dir / "stats.json")
+            )
+            stack.enter_context(mock.patch("summarize.EVENTS_FILE", events_file))
+            stack.enter_context(
+                mock.patch("summarize.os.getcwd", return_value="/test/project")
+            )
+            if replace_side_effect is not None:
+                stack.enter_context(
+                    mock.patch("summarize.os.replace", side_effect=replace_side_effect)
+                )
+            summarize_main()
+
+    def test_old_stats_intact_until_replace(self, tmp_path):
+        """Regression: at the moment of the swap, the destination must
+        still hold the previous complete document and the source must be
+        a complete new document — never a partial write in place."""
+        stats_file = tmp_path / "stats.json"
+        stats_file.write_text('{"old": true}\n')
+
+        real_replace = os.replace
+        observed = {}
+
+        def checking_replace(src, dst):
+            observed["dst_at_replace"] = Path(dst).read_text()
+            observed["src_doc"] = json.loads(Path(src).read_text())
+            return real_replace(src, dst)
+
+        self._run_main(tmp_path, replace_side_effect=checking_replace)
+
+        assert observed["dst_at_replace"] == '{"old": true}\n'
+        assert observed["src_doc"]["total_events"] == 1
+
+        final = json.loads(stats_file.read_text())
+        assert final["total_events"] == 1
+
+    def test_no_tempfile_leftovers(self, tmp_path):
+        self._run_main(tmp_path)
+        leftovers = [
+            p.name for p in tmp_path.iterdir()
+            if p.name not in ("stats.json", "events.jsonl")
+        ]
+        assert leftovers == []
+        # And the result is complete, parseable JSON
+        stats = json.loads((tmp_path / "stats.json").read_text())
+        assert stats["tools"]["Read"]["calls"] == 1

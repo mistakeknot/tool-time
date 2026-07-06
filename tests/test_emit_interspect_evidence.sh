@@ -27,9 +27,16 @@ export INTERSPECT_QUARANTINE_HOURS=0
 export TOOL_TIME_STATS_FILE="$TEST_DIR/stats.json"
 export TOOL_TIME_THRESHOLDS="$TEST_DIR/thresholds.json"
 
-# Locate the bridge + interspect lib
+# Locate the bridge + interspect lib. These tests need a sibling interspect
+# checkout (development rig only) — skip cleanly when absent so marketplace
+# installs and bare CI clones don't report a failure.
 BRIDGE_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../scripts" && pwd)/emit-interspect-evidence.sh"
-export INTERSPECT_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../interspect/hooks" && pwd)/lib-interspect.sh"
+INTERSPECT_HOOKS_DIR="$(dirname "${BASH_SOURCE[0]}")/../../interspect/hooks"
+if [ ! -d "$INTERSPECT_HOOKS_DIR" ]; then
+  echo "SKIP: sibling interspect checkout not found at ../../interspect — skipping bridge tests"
+  exit 0
+fi
+export INTERSPECT_LIB="$(cd "$INTERSPECT_HOOKS_DIR" && pwd)/lib-interspect.sh"
 
 # Pre-init the interspect DB so we can query it directly
 source "$INTERSPECT_LIB"

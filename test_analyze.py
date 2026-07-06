@@ -45,7 +45,7 @@ def _ts_str(day_offset: int = 0, hour: int = 12) -> str:
 
 def _make_event(
     tool: str,
-    event_type: str = "PreToolUse",
+    event_type: str = "PostToolUse",
     error: str | None = None,
     session: str = "abc-def-ghi",
     seq: int = 1,
@@ -79,14 +79,15 @@ def _make_event(
 # --- Helpers ---
 
 class TestIsCallEvent:
-    def test_pre_tool_use(self):
-        assert is_call_event({"event": "PreToolUse"}) is True
+    def test_post_tool_use(self):
+        assert is_call_event({"event": "PostToolUse"}) is True
 
     def test_tool_use(self):
         assert is_call_event({"event": "ToolUse"}) is True
 
-    def test_post_tool_use(self):
-        assert is_call_event({"event": "PostToolUse"}) is False
+    def test_pre_tool_use(self):
+        # Calls count at PostToolUse — Pre must not double-count a Pre+Post pair
+        assert is_call_event({"event": "PreToolUse"}) is False
 
     def test_session_end(self):
         assert is_call_event({"event": "SessionEnd"}) is False
@@ -173,9 +174,9 @@ class TestLoadAllEvents:
     def test_load_with_filters(self, tmp_path):
         events_file = tmp_path / "events.jsonl"
         events = [
-            {"v": 1, "id": "s1-1", "ts": "2026-01-10T12:00:00Z", "event": "PreToolUse", "tool": "Read", "project": "/p1"},
-            {"v": 1, "id": "s1-2", "ts": "2026-01-20T12:00:00Z", "event": "PreToolUse", "tool": "Edit", "project": "/p1"},
-            {"v": 1, "id": "s2-1", "ts": "2026-01-20T12:00:00Z", "event": "PreToolUse", "tool": "Bash", "project": "/p2"},
+            {"v": 1, "id": "s1-1", "ts": "2026-01-10T12:00:00Z", "event": "PostToolUse", "tool": "Read", "project": "/p1"},
+            {"v": 1, "id": "s1-2", "ts": "2026-01-20T12:00:00Z", "event": "PostToolUse", "tool": "Edit", "project": "/p1"},
+            {"v": 1, "id": "s2-1", "ts": "2026-01-20T12:00:00Z", "event": "PostToolUse", "tool": "Bash", "project": "/p2"},
         ]
         events_file.write_text("\n".join(json.dumps(e) for e in events))
 
@@ -207,7 +208,7 @@ class TestLoadAllEvents:
     def test_malformed_lines_skipped(self, tmp_path):
         events_file = tmp_path / "events.jsonl"
         lines = [
-            json.dumps({"v": 1, "id": "s1-1", "ts": "2026-01-10T12:00:00Z", "event": "PreToolUse", "tool": "Read", "project": "/p"}),
+            json.dumps({"v": 1, "id": "s1-1", "ts": "2026-01-10T12:00:00Z", "event": "PostToolUse", "tool": "Read", "project": "/p"}),
             "not json",
             json.dumps({"v": 1, "ts": "2026-01-10T12:00:00Z"}),  # missing id
         ]
@@ -238,8 +239,8 @@ class TestClassifySession:
 
     def test_no_call_events(self):
         events = [
-            _make_event("Read", event_type="PostToolUse"),
-            _make_event("Edit", event_type="PostToolUse"),
+            _make_event("Read", event_type="PreToolUse"),
+            _make_event("Edit", event_type="PreToolUse"),
         ]
         assert classify_session(events) == "other"
 
@@ -262,7 +263,7 @@ class TestClassifySession:
         events = []
         for i in range(1, 11):
             events.append(_make_event("Bash", seq=i))
-        # Add errors on PostToolUse (where errors actually appear for hook events)
+        # Errors ride on PostToolUse call events (5/15 errors > 15%)
         for i in range(1, 6):
             events.append(_make_event("Bash", event_type="PostToolUse", error="fail", seq=10 + i))
         assert classify_session(events) == "debugging"
@@ -314,9 +315,9 @@ class TestClassifySession:
         assert result == "debugging"
 
     def test_division_by_zero_guard(self):
-        """Session with only PostToolUse events → 'other' (no call events)."""
+        """Session with only PreToolUse events → 'other' (no call events)."""
         events = [
-            _make_event("Read", event_type="PostToolUse", seq=1),
+            _make_event("Read", event_type="PreToolUse", seq=1),
         ]
         assert classify_session(events) == "other"
 
@@ -360,7 +361,7 @@ class TestComputeBigrams:
         assert any(b["from"] == "Edit" and b["to"] == "Bash" for b in result)
 
     def test_no_self_loops_from_pre_post(self):
-        """Pre+Post pairs should NOT create self-loops — only PreToolUse counted."""
+        """Pre+Post pairs should NOT create self-loops — only PostToolUse counted."""
         events = [
             _make_event("Read", event_type="PreToolUse", seq=1),
             _make_event("Read", event_type="PostToolUse", seq=2),
@@ -368,7 +369,7 @@ class TestComputeBigrams:
             _make_event("Edit", event_type="PostToolUse", seq=4),
         ]
         result = compute_bigrams({"s1": events}, min_count=1)
-        # Only transition should be Read → Edit (from PreToolUse events)
+        # Only transition should be Read → Edit (from PostToolUse events)
         assert len(result) == 1
         assert result[0]["from"] == "Read" and result[0]["to"] == "Edit"
 
@@ -389,7 +390,7 @@ class TestComputeRetryPatterns:
     def test_file_based_retry_detected(self):
         events = [
             _make_event("Edit", event_type="PostToolUse", error="not unique", seq=1, file="/a.py"),
-            _make_event("Edit", event_type="PreToolUse", seq=2, file="/a.py"),
+            _make_event("Edit", event_type="PostToolUse", seq=2, file="/a.py"),
         ]
         result = compute_retry_patterns({"s1": events})
         assert len(result) == 1
@@ -399,7 +400,7 @@ class TestComputeRetryPatterns:
         """Bash→Bash after error should NOT count as retry (no file field)."""
         events = [
             _make_event("Bash", event_type="PostToolUse", error="fail", seq=1),
-            _make_event("Bash", event_type="PreToolUse", seq=2),
+            _make_event("Bash", event_type="PostToolUse", seq=2),
         ]
         result = compute_retry_patterns({"s1": events})
         assert len(result) == 0
@@ -407,7 +408,31 @@ class TestComputeRetryPatterns:
     def test_different_file_not_retry(self):
         events = [
             _make_event("Edit", event_type="PostToolUse", error="fail", seq=1, file="/a.py"),
-            _make_event("Edit", event_type="PreToolUse", seq=2, file="/b.py"),
+            _make_event("Edit", event_type="PostToolUse", seq=2, file="/b.py"),
+        ]
+        result = compute_retry_patterns({"s1": events})
+        assert len(result) == 0
+
+    def test_retry_detected_across_interleaved_non_call_event(self):
+        """Regression: an interleaved non-call event (e.g. future
+        PreToolUse logging) between error and retry must not hide the
+        retry — the scan looks for the next CALL event, not events[i+1]."""
+        events = [
+            _make_event("Edit", event_type="PostToolUse", error="not unique", seq=1, file="/a.py"),
+            _make_event("Edit", event_type="PreToolUse", seq=2, file="/a.py"),
+            _make_event("Edit", event_type="PostToolUse", seq=3, file="/a.py"),
+        ]
+        result = compute_retry_patterns({"s1": events})
+        assert len(result) == 1
+        assert result[0]["tool"] == "Edit"
+
+    def test_next_call_event_different_tool_breaks_retry(self):
+        """The retry candidate is the NEXT call event — if that call is a
+        different tool, the later same-tool call is not an immediate retry."""
+        events = [
+            _make_event("Edit", event_type="PostToolUse", error="fail", seq=1, file="/a.py"),
+            _make_event("Read", event_type="PostToolUse", seq=2, file="/a.py"),
+            _make_event("Edit", event_type="PostToolUse", seq=3, file="/a.py"),
         ]
         result = compute_retry_patterns({"s1": events})
         assert len(result) == 0
@@ -539,21 +564,21 @@ class TestRunAnalysis:
             events.append({
                 "v": 1, "id": f"sess1-{i}",
                 "ts": f"2026-01-15T{10+i}:00:00Z",
-                "event": "PreToolUse", "tool": "Read",
+                "event": "PostToolUse", "tool": "Read",
                 "project": "/test", "error": None, "source": "claude-code",
             })
         for i in range(1, 4):
             events.append({
                 "v": 1, "id": f"sess1-{5+i}",
                 "ts": f"2026-01-15T{15+i}:00:00Z",
-                "event": "PreToolUse", "tool": "Edit",
+                "event": "PostToolUse", "tool": "Edit",
                 "project": "/test", "error": None, "source": "claude-code",
             })
         for i in range(1, 3):
             events.append({
                 "v": 1, "id": f"sess2-{i}",
                 "ts": f"2026-01-16T{10+i}:00:00Z",
-                "event": "PreToolUse", "tool": "shell",
+                "event": "PostToolUse", "tool": "shell",
                 "project": "/test", "error": None, "source": "codex",
             })
         events_file.write_text("\n".join(json.dumps(e) for e in events))
@@ -570,12 +595,35 @@ class TestRunAnalysis:
             assert "claude-code" in result["by_source"]
             assert "codex" in result["by_source"]
 
+    def test_post_tool_use_only_stream_counts_calls(self, tmp_path):
+        """Regression: production logs contain ONLY PostToolUse events for
+        tools — call-derived metrics must be non-empty for such a stream."""
+        events_file = tmp_path / "events.jsonl"
+        events = []
+        for i in range(1, 6):
+            events.append({
+                "v": 1, "id": f"sess1-{i}",
+                "ts": f"2026-01-15T{10+i}:00:00Z",
+                "event": "PostToolUse", "tool": "Read",
+                "project": "/test", "error": None, "source": "claude-code",
+            })
+        events_file.write_text("\n".join(json.dumps(e) for e in events))
+
+        with patch("analyze.EVENTS_FILE", events_file):
+            result = run_analysis(
+                since=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                tz=timezone.utc,
+            )
+            assert result["sessions"]["avg_tools_per_session"] == 5
+            assert result["sessions"]["classifications"].get("reviewing") == 1
+            assert len(result["tool_chains"]["bigrams"]) > 0
+
     def test_schema_keys(self, tmp_path):
         """Verify all expected top-level keys exist."""
         events_file = tmp_path / "events.jsonl"
         events_file.write_text(json.dumps({
             "v": 1, "id": "s-1", "ts": "2026-01-15T12:00:00Z",
-            "event": "PreToolUse", "tool": "Read", "project": "/test",
+            "event": "PostToolUse", "tool": "Read", "project": "/test",
             "error": None, "source": "claude-code",
         }))
         with patch("analyze.EVENTS_FILE", events_file):

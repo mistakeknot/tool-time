@@ -45,8 +45,12 @@ TOOL_ALIASES: dict[str, str] = {
 # --- Helpers ---
 
 def is_call_event(event: dict) -> bool:
-    """True for events that represent a tool invocation (not result)."""
-    return event.get("event") in ("PreToolUse", "ToolUse")
+    """True for events that represent a tool invocation.
+
+    Calls are counted at PostToolUse (not PreToolUse) to avoid
+    double-counting if PreToolUse logging is ever added.
+    """
+    return event.get("event") in ("PostToolUse", "ToolUse")
 
 
 def is_error_event(event: dict) -> bool:
@@ -257,8 +261,8 @@ def compute_session_metrics(sessions: dict[str, list[dict]]) -> dict:
 def compute_bigrams(sessions: dict[str, list[dict]], min_count: int | None = None) -> list[dict]:
     """Compute tool transition bigrams across all sessions.
 
-    Only counts transitions between call events (PreToolUse/ToolUse),
-    ignoring PostToolUse to avoid fake self-loops from Pre→Post pairs.
+    Only counts transitions between call events (PostToolUse/ToolUse),
+    ignoring PreToolUse to avoid fake self-loops from Pre→Post pairs.
     """
     bigrams: Counter[tuple[str, str]] = Counter()
 
@@ -309,12 +313,19 @@ def compute_trigrams(sessions: dict[str, list[dict]], min_count: int = 3) -> lis
 
 FILE_TOOLS = {"Read", "Edit", "Write"}
 
+# Bounded forward scan when looking for the next call event after an
+# error — keeps the loop linear even if many non-call events interleave.
+RETRY_SCAN_WINDOW = 10
+
 
 def compute_retry_patterns(sessions: dict[str, list[dict]]) -> list[dict]:
     """Detect same-tool-same-file retry after error.
 
     Only for file-based tools (Read, Edit, Write) — other tools don't
-    have a file field, causing false positives.
+    have a file field, causing false positives. The retry candidate is
+    the NEXT CALL EVENT in the session, scanning past interleaved
+    non-call events (e.g. future PreToolUse logging) within a bounded
+    window rather than requiring strict adjacency.
     """
     retry_stats: dict[str, dict[str, Any]] = defaultdict(
         lambda: {"total_retries": 0, "max_retries": 0, "sessions_affected": set()}
@@ -325,20 +336,26 @@ def compute_retry_patterns(sessions: dict[str, list[dict]]) -> list[dict]:
 
         for i in range(len(events) - 1):
             curr = events[i]
-            nxt = events[i + 1]
 
             tool = curr.get("tool", "")
             if tool not in FILE_TOOLS:
                 continue
 
-            # Error on current (PostToolUse/ToolUse), followed by call to same tool+file
-            if (
-                is_error_event(curr)
-                and is_call_event(nxt)
-                and nxt.get("tool") == tool
-                and curr.get("file") is not None
-                and curr.get("file") == nxt.get("file")
-            ):
+            # Error on current (PostToolUse/ToolUse) with a known file
+            if not is_error_event(curr) or curr.get("file") is None:
+                continue
+
+            # Find the next call event within the scan window
+            nxt = None
+            for j in range(i + 1, min(i + 1 + RETRY_SCAN_WINDOW, len(events))):
+                if is_call_event(events[j]):
+                    nxt = events[j]
+                    break
+            if nxt is None:
+                continue
+
+            # Retry = next call event hits the same tool+file
+            if nxt.get("tool") == tool and nxt.get("file") == curr.get("file"):
                 session_retries[tool] += 1
 
         for tool, count in session_retries.items():

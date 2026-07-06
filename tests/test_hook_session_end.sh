@@ -120,6 +120,59 @@ assert_eq "SessionStart writes nothing to events.jsonl" "$POST_LINES" "0"
 assert_no_file "SessionStart does NOT trigger summarize" "$DATA_DIR/stats.json"
 
 echo ""
+echo "=== Group 6: summarize.py failure must NOT skip maintenance (digest tripwire) ==="
+# Regression: seq GC and maintain.py used to run only inside
+# 'if python3 summarize.py; then' — when summarize.py itself failed, the
+# digest tripwire that is supposed to report a broken pipeline never ran.
+# Maintenance must run unconditionally; only upload.py stays gated on
+# summarize.py success.
+MARKER_DIR="$TEST_DIR/markers"
+mkdir -p "$MARKER_DIR" "$TEST_DIR/bin"
+REAL_PYTHON3=$(command -v python3)
+export MARKER_DIR REAL_PYTHON3
+
+# python3 shim: summarize.py fails; maintain.py/upload.py drop invocation markers
+cat > "$TEST_DIR/bin/python3" <<'SHIM'
+#!/usr/bin/env bash
+case "$1" in
+  */summarize.py) touch "$MARKER_DIR/summarize.invoked"; exit 1 ;;
+  */maintain.py)  touch "$MARKER_DIR/maintain.invoked";  exit 0 ;;
+  */upload.py)    touch "$MARKER_DIR/upload.invoked";    exit 0 ;;
+  *) exec "$REAL_PYTHON3" "$@" ;;
+esac
+SHIM
+chmod +x "$TEST_DIR/bin/python3"
+
+# Stale orphan seq file (>7 days) that the GC must delete despite the failure
+echo "3" > "$DATA_DIR/.seq-orphan-after-failure"
+OLD_TS=$("$REAL_PYTHON3" -c "import datetime; print((datetime.datetime.now()-datetime.timedelta(days=9)).strftime('%Y%m%d%H%M'))")
+touch -t "$OLD_TS" "$DATA_DIR/.seq-orphan-after-failure"
+
+rm -f "$DATA_DIR/stats.json"
+echo '{"hook_event_name":"SessionEnd","session_id":"fail-session","cwd":"/tmp"}' \
+  | PATH="$TEST_DIR/bin:$PATH" bash "$HOOK_SCRIPT"
+sleep 1  # let any (wrongly) backgrounded upload land before asserting
+
+assert_file "summarize.py was invoked (and failed)" "$MARKER_DIR/summarize.invoked"
+assert_no_file "stats.json not written by failing summarize" "$DATA_DIR/stats.json"
+assert_file "maintain.py STILL runs when summarize.py fails" "$MARKER_DIR/maintain.invoked"
+assert_no_file "orphan seq GC STILL runs when summarize.py fails" "$DATA_DIR/.seq-orphan-after-failure"
+assert_no_file "upload.py stays gated on summarize success" "$MARKER_DIR/upload.invoked"
+
+echo ""
+echo "=== Group 7: hooks.json wires summarize.py only via hook.sh (no parallel race) ==="
+# Regression: the second SessionEnd command used to run its own summarize.py
+# in parallel with hook.sh's, racing on stats.json. The interspect-evidence
+# bridge (with its INPUT capture) must remain intact.
+HOOKS_JSON="$PLUGIN_ROOT/hooks/hooks.json"
+SUMMARIZE_REFS=$(grep -c 'summarize\.py' "$HOOKS_JSON" || true)
+assert_eq "no direct summarize.py invocation in hooks.json" "$SUMMARIZE_REFS" "0"
+BRIDGE_REFS=$(grep -c 'emit-interspect-evidence\.sh' "$HOOKS_JSON" || true)
+assert_eq "interspect evidence bridge still registered" "$BRIDGE_REFS" "1"
+INPUT_CAPTURE=$(grep -c 'INPUT=\$(cat)' "$HOOKS_JSON" || true)
+assert_eq "evidence command still captures stdin INPUT" "$INPUT_CAPTURE" "1"
+
+echo ""
 echo "─────────────────────────"
 echo "PASS: $PASS  FAIL: $FAIL"
 echo "─────────────────────────"

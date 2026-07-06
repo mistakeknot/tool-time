@@ -10,6 +10,11 @@ triggers:
   - deep analysis
   - dashboard
   - show charts
+  - rig
+  - rig audit
+  - what should I disable
+  - unused servers
+  - unused plugins
   - delete my data
   - remove my data
   - forget me
@@ -19,6 +24,36 @@ user_invocable: true
 # tool-time: Tool Usage Analysis
 
 You are analyzing tool usage data to find problems and offer to fix them — not narrate numbers.
+
+## Rig Audit Mode
+
+If the user's request matches "rig", "rig audit", "what should I disable", or asks about unused servers/plugins, run this mode instead of the standard flow below.
+
+1. Run: `python3 $CLAUDE_PLUGIN_ROOT/rig.py`
+2. Read `~/.claude/tool-time/rig.json` (sections: `servers`, `duplicates`, `zero_use`, `plugins`, `meta`). The script collects data only — you decide what earns its keep.
+
+`servers` is keyed by source-qualified identity: `plugin:<plugin>/<name>` for plugin servers, the bare name for global/project servers. Same-named servers from different sources are separate entries with separate counts — never merged. Each entry carries `name` (the unqualified server name) and `aliases` (raw event prefixes like `plugin_interknow_qmd`, for relating events to registrations). `commands` are credential-redacted (secret flag values, high-entropy tokens, and URL query strings/userinfo appear as `<redacted>` or are stripped).
+
+Present, in this order:
+
+- **Zero-use servers** (`zero_use`, qualified identities): for each, show its `sources`, `last_used`, and RAM cost (`proc_count` processes, `rss_mb` MB). A server with 0 calls in 30 days but nonzero `rss_mb` is paying rent for nothing.
+- **Duplicates** (`duplicates`): registrations that MAY be the same server, with a `reason` field. `command_match` means the identical launch command is registered twice — a firm duplicate. `name_match` (e.g., a global `qmd` AND a plugin's `qmd`) is only a hypothesis: same name does not prove same server, and their call counts are kept separate — compare the `command` of each registration before recommending a removal. When it is genuinely the same server, recommend keeping one — usually the plugin registration if the plugin is otherwise used.
+- **Idle plugins** (`plugins`): plugins with `mcp_calls_30d == 0` AND `skill_calls_30d == 0`. `mcp_calls_30d` counts only calls to that plugin's own qualified servers. Note `skills_shipped` — a plugin shipping skills may be used via skills even without MCP calls.
+
+For each recommendation, give the exact removal command and estimated RAM savings (`rss_mb`):
+
+- Global server: `claude mcp remove <name>`
+- Project server (source `project:<path>`): `claude mcp remove <name>` run from that project directory
+- Plugin: edit `enabledPlugins` in `~/.claude/settings.json`, setting `"<plugin>@<marketplace>": false`
+
+**Require explicit user confirmation before editing any config file.** Present the full list of proposed removals first, and only apply the ones the user approves.
+
+Caveats to state:
+
+- Hook-driven plugins can be valuable with zero tool calls (tool-time itself logs via hooks, not MCP). Check each candidate plugin's cache dir (`~/.claude/plugins/cache/*/<plugin>/*/hooks/hooks.json` or a `hooks` key in its plugin.json) before recommending removal — if you can't determine this, say so and tell the user to check.
+- **Subagent blind spot**: hooks do not capture tool calls made inside subagents, so a server used mainly by subagent-driven workflows (multi-agent reviews, research fan-outs) can show zero use here while being genuinely active. Before recommending removal, cross-check the session transcripts: `grep -l 'mcp__<server>' ~/.claude/projects/*/*.jsonl | head` — if transcripts show calls that events.jsonl missed, say so and keep the server.
+- `skill_calls_30d` is best-effort substring matching (historical events sometimes carry file paths in the skill field), so treat it as a signal, not a count.
+- Check `meta.warnings` and mention any inputs that couldn't be read.
 
 ## Step 1: Gather Data
 

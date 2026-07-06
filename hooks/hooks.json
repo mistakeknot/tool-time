@@ -47,7 +47,7 @@
           },
           {
             "type": "command",
-            "command": "INPUT=$(cat); python3 \"$CLAUDE_PLUGIN_ROOT/summarize.py\" >/dev/null 2>&1 || true; echo \"$INPUT\" | bash \"$CLAUDE_PLUGIN_ROOT/scripts/emit-interspect-evidence.sh\" 2>/dev/null || true",
+            "command": "INPUT=$(cat); echo \"$INPUT\" | bash \"$CLAUDE_PLUGIN_ROOT/scripts/emit-interspect-evidence.sh\" 2>/dev/null || true",
             "timeout": 15
           }
         ]

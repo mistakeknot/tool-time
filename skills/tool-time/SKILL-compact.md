@@ -4,9 +4,11 @@ Analyze tool usage patterns across 7-90 days to find problems and offer fixes.
 
 ## When to Invoke
 
-User says "tool stats", "tool usage", "tool-time", "analyze tools", "dashboard", "show charts", or asks to delete data.
+User says "tool stats", "tool usage", "tool-time", "analyze tools", "dashboard", "show charts", "rig", "what should I disable", or asks to delete data.
 
 ## Workflow
+
+0. **Rig Audit Shortcut** — if trigger is "rig"/"what should I disable": run `rig.py`, read `rig.json`, present zero-use servers (with RAM cost), duplicates (`reason: command_match` = firm, `name_match` = hypothesis), idle plugins; give exact removal commands; confirm before editing configs; caveat hook-driven plugins and the subagent blind spot (cross-check transcripts). Stop.
 
 1. **Gather Data** — run `summarize.py` and `analyze.py --timezone America/Los_Angeles`, read `stats.json` + `analysis.json`, then run `upload.py`.
 

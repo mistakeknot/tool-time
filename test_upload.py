@@ -204,3 +204,46 @@ class TestAnonymizeEcosystemFields:
         stats = {**SAMPLE_STATS, "skills": {"foo": {"calls": 3, "secret": "bad"}}}
         result = anonymize(stats, "tok")
         assert result["skills"] == {"foo": 3}
+
+    def test_path_like_skill_names_dropped(self):
+        """Historical hook bug wrote file paths into the skill field —
+        path-like skill names must never appear in the submission payload."""
+        stats = {
+            **SAMPLE_STATS,
+            "skills": {
+                "superpowers:brainstorming": {"calls": 5},
+                "/Users/sma/projects/secret/file.py": {"calls": 3},
+                "src/relative/leak.md": {"calls": 1},
+            },
+        }
+        result = anonymize(stats, "tok")
+        assert result["skills"] == {"superpowers:brainstorming": 5}
+        payload_json = json.dumps(result)
+        assert "/Users/sma" not in payload_json
+        assert "leak.md" not in payload_json
+
+    def test_uploaded_payload_has_no_path_like_skills(self, tmp_path):
+        """End-to-end: main() must never hand a path-like skill name to
+        upload()."""
+        config_file = tmp_path / "config.json"
+        config_file.write_text(
+            json.dumps({"community_sharing": True, "submission_token": "tok"})
+        )
+        stats_file = tmp_path / "stats.json"
+        corrupted = {
+            **SAMPLE_STATS,
+            "skills": {
+                "tool-time:tool-time": {"calls": 2},
+                "/Users/sma/projects/tool-time/summarize.py": {"calls": 9},
+            },
+        }
+        stats_file.write_text(json.dumps(corrupted))
+        with (
+            mock.patch("upload.CONFIG_FILE", config_file),
+            mock.patch("upload.STATS_FILE", stats_file),
+            mock.patch("upload.upload", return_value=True) as mock_upload,
+        ):
+            assert main() == 0
+            payload = mock_upload.call_args[0][0]
+        assert all("/" not in name for name in payload["skills"])
+        assert payload["skills"] == {"tool-time:tool-time": 2}
