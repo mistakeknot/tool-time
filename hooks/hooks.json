@@ -6,8 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/agent-output-redirect.sh\"",
-            "timeout": 10
+            "command": "bash",
+            "timeout": 10,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/agent-output-redirect.sh"
+            ]
           }
         ]
       }
@@ -18,8 +21,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/hook.sh\"",
-            "timeout": 5
+            "command": "bash",
+            "timeout": 5,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook.sh"
+            ]
           }
         ]
       }
@@ -30,8 +36,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/hook.sh\"",
-            "timeout": 5
+            "command": "bash",
+            "timeout": 5,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook.sh"
+            ]
           }
         ]
       }
@@ -42,8 +51,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"$CLAUDE_PLUGIN_ROOT/hooks/hook.sh\"",
-            "timeout": 10
+            "command": "bash",
+            "timeout": 10,
+            "args": [
+              "${CLAUDE_PLUGIN_ROOT}/hooks/hook.sh"
+            ]
           },
           {
             "type": "command",
