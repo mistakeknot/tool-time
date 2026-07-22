@@ -8,3 +8,6 @@ __pycache__/
 .clavain/**/*.db-shm
 .clavain/**/*.db-wal
 .clavain/intercore.db*
+
+# Local publish-approval marker (never committed)
+.publish-approved
