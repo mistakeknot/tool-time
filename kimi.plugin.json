@@ -1,0 +1,48 @@
+{
+  "name": "tool-time",
+  "version": "0.4.0",
+  "description": "Tool usage analytics for Claude Code. Tracks tool patterns via hooks, detects inefficiencies, and offers community comparison with anonymized data.",
+  "license": "MIT",
+  "keywords": [
+    "tools",
+    "analytics",
+    "usage",
+    "hooks",
+    "community"
+  ],
+  "author": "mistakeknot",
+  "interface": {
+    "displayName": "tool-time",
+    "shortDescription": "Tool usage analytics for Claude Code. Tracks tool patterns via hooks, detects inefficiencies, and offers community co..."
+  },
+  "skills": "./skills/",
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Agent",
+      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/agent-output-redirect.sh\"",
+      "timeout": 10
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "*",
+      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/hook.sh\"",
+      "timeout": 5
+    },
+    {
+      "event": "SessionStart",
+      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/hook.sh\"",
+      "timeout": 5
+    },
+    {
+      "event": "SessionEnd",
+      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/hook.sh\"",
+      "timeout": 10
+    },
+    {
+      "event": "SessionEnd",
+      "command": "INPUT=$(cat); echo \"$INPUT\" | bash \"$KIMI_PLUGIN_ROOT/scripts/emit-interspect-evidence.sh\" 2>/dev/null || true",
+      "timeout": 15
+    }
+  ]
+}
