@@ -1,6 +1,6 @@
 {
   "name": "tool-time",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Tool usage analytics for Claude Code. Tracks tool patterns via hooks, detects inefficiencies, and offers community comparison with anonymized data.",
   "license": "MIT",
   "keywords": [
@@ -20,23 +20,23 @@
     {
       "event": "PreToolUse",
       "matcher": "Agent",
-      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/agent-output-redirect.sh\"",
+      "command": "bash",
       "timeout": 10
     },
     {
       "event": "PostToolUse",
       "matcher": "*",
-      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/hook.sh\"",
+      "command": "bash",
       "timeout": 5
     },
     {
       "event": "SessionStart",
-      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/hook.sh\"",
+      "command": "bash",
       "timeout": 5
     },
     {
       "event": "SessionEnd",
-      "command": "bash \"$KIMI_PLUGIN_ROOT/hooks/hook.sh\"",
+      "command": "bash",
       "timeout": 10
     },
     {
