@@ -91,17 +91,40 @@ def scan_installed_plugins(
     return []
 
 
+def is_error_observable(event: dict[str, Any]) -> bool:
+    """True when this event's `error` field can be trusted.
+
+    Only transcript-derived events (`event: "ToolUse"`, written by
+    backfill.py via parsers.py) carry error truth: session transcripts record
+    an explicit `is_error` flag per tool_result.
+
+    Hook-derived events (`event: "PostToolUse"`) never can. Claude Code does
+    not fire PostToolUse when a tool fails, so the hook only ever observes
+    successes — measured directly, and the reason the old payload-sniffing
+    heuristic produced 20,517 false positives and 0 true ones. Counting a
+    hook event as "no error" would be just as wrong as the old heuristic: it
+    is not an observation of success, it is the absence of an observation.
+    """
+    return event.get("event") == "ToolUse"
+
+
 def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
     """Compute per-tool call/error/rejection counts, skill counts,
-    MCP server stats, and session-scoped edit-without-read count."""
+    MCP server stats, and session-scoped edit-without-read count.
+
+    `errors`/`rejections` are None for a tool with no error-observable events
+    (see is_error_observable). None means "not measured", which is not the
+    same fact as 0, and consumers must not render it as a rate.
+    """
     tool_counts: Counter[str] = Counter()
+    tool_observed: Counter[str] = Counter()
     tool_errors: Counter[str] = Counter()
     tool_rejections: Counter[str] = Counter()
     model_counts: Counter[str] = Counter()
     source_counts: Counter[str] = Counter()
     skill_counts: Counter[str] = Counter()
     mcp_server_stats: dict[str, dict[str, int]] = defaultdict(
-        lambda: {"calls": 0, "errors": 0}
+        lambda: {"calls": 0, "errors": 0, "error_observed_calls": 0}
     )
     tool_last_used: dict[str, datetime] = {}
     mcp_last_used: dict[str, datetime] = {}
@@ -158,16 +181,23 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
                     if ts is not None and (server not in mcp_last_used or ts > mcp_last_used[server]):
                         mcp_last_used[server] = ts
 
-            # Errors and rejections ride on the same event
-            error = ev.get("error")
-            if error is not None:
-                if is_user_rejection(error):
-                    tool_rejections[tool] += 1
-                else:
-                    tool_errors[tool] += 1
-                    # Track MCP server errors
-                    if server:
-                        mcp_server_stats[server]["errors"] += 1
+            # Errors and rejections ride on the same event, but only from a
+            # source that can actually observe a failure. Events from the
+            # hook path are skipped entirely rather than counted as clean —
+            # they are unobserved, not successful.
+            if is_error_observable(ev):
+                tool_observed[tool] += 1
+                if server:
+                    mcp_server_stats[server]["error_observed_calls"] += 1
+                error = ev.get("error")
+                if error is not None:
+                    if is_user_rejection(error):
+                        tool_rejections[tool] += 1
+                    else:
+                        tool_errors[tool] += 1
+                        # Track MCP server errors
+                        if server:
+                            mcp_server_stats[server]["errors"] += 1
 
     # Session-scoped edit-without-read
     edit_without_read_count = 0
@@ -186,10 +216,16 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
     tools: dict[str, dict[str, Any]] = {}
     for tool in sorted(tool_counts, key=tool_counts.get, reverse=True):
         last = tool_last_used.get(tool)
+        observed = tool_observed.get(tool, 0)
         tools[tool] = {
             "calls": tool_counts[tool],
-            "errors": tool_errors.get(tool, 0),
-            "rejections": tool_rejections.get(tool, 0),
+            # Denominator for errors/rejections. `calls` is NOT that
+            # denominator: most events come from a source that cannot see
+            # failures, so errors/calls understates by whatever fraction of
+            # calls was never error-observable.
+            "error_observed_calls": observed,
+            "errors": tool_errors.get(tool, 0) if observed else None,
+            "rejections": tool_rejections.get(tool, 0) if observed else None,
             "last_used": last.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if last else None,
         }
 

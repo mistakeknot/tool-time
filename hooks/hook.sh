@@ -29,6 +29,16 @@ if [ "$EVENT_NAME" = "SessionEnd" ]; then
   if python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null; then
     python3 "$PLUGIN_ROOT/upload.py" </dev/null >/dev/null 2>&1 &
   fi
+  # Refresh the edit diagnostic at most once a day, in the background. It
+  # scans session transcripts (~5s over a 7d window), which is the only
+  # source that can observe tool failures at all — the hook path cannot, so
+  # without this there is no error signal to report. Backgrounded and
+  # staleness-gated so it never eats the SessionEnd hook timeout.
+  EDIT_STATS_FILE="$DATA_DIR/edit_stats.json"
+  if [ ! -s "$EDIT_STATS_FILE" ] || [ -z "$(find "$EDIT_STATS_FILE" -mmin -1440 2>/dev/null)" ]; then
+    python3 "$PLUGIN_ROOT/edit_stats.py" --days 7 --out "$EDIT_STATS_FILE" \
+      </dev/null >/dev/null 2>&1 &
+  fi
   # Maintenance runs UNCONDITIONALLY: maintain.py owns the digest tripwire
   # that reports a broken pipeline, so gating it on summarize.py success would
   # silence the very failure it exists to surface.
@@ -80,11 +90,28 @@ TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 ID="${SESSION_ID}-${SEQ}"
 
 # Build the complete JSONL line in a SINGLE jq pass over the original hook
-# JSON. skill/file/model keys are included only when non-empty; the PostToolUse
-# error heuristic (stringified result matching error|Error|ERROR -> first
-# 200 chars, newlines to spaces; else null) lives here too so no logged field
-# ever transits the shell. Claude Code PostToolUse payloads carry the result
-# in tool_response; tool_result is kept as a fallback for other clients.
+# JSON. skill/file/model keys are included only when non-empty, so no logged
+# field ever transits the shell.
+#
+# `error` is ALWAYS null on this path, deliberately. Two measured facts:
+#
+#   1. PostToolUse does not fire when a tool fails. Verified by deliberately
+#      failing an Edit: the preceding Read logged an event, the failed Edit
+#      logged nothing. A hook that only fires on success can never witness a
+#      failure, so any error value produced here is a false positive.
+#   2. The old heuristic (stringify tool_response, test /error|Error|ERROR/)
+#      matched on tool payloads, not tool failures. A successful Edit's
+#      tool_response embeds `originalFile` — the entire pre-edit file — so any
+#      source file containing the substring "error" was logged as a failure.
+#      Result across 209,982 historical events: 20,517 non-null error values,
+#      0 of which contained `<tool_use_error>`. Every one was a misfiled
+#      success, which is where the phantom "Edit error rate is 51%" digest
+#      alert came from.
+#
+# Error truth lives in session transcripts, which carry an explicit `is_error`
+# flag. parsers.py reads it, backfill.py lands it as `event:"ToolUse"` events,
+# and summarize.py counts errors ONLY from those. See edit_stats.py for the
+# per-call diagnostic. Do not reintroduce payload sniffing here.
 LINE=$(echo "$INPUT" | jq -c \
   --arg id "$ID" \
   --arg ts "$TS" \
@@ -92,11 +119,7 @@ LINE=$(echo "$INPUT" | jq -c \
     event:(.hook_event_name // ""),
     tool:(.tool_name // ""),
     project:(.cwd // ""),
-    error:((.tool_response // .tool_result) as $tr |
-           if .hook_event_name == "PostToolUse" and $tr
-              and (($tr | tostring) | test("error|Error|ERROR"))
-           then (($tr | tostring) | gsub("\n"; " ") | .[0:200])
-           else null end),
+    error:null,
     source:"claude-code"}
    + (if (.tool_input.skill // "") != "" then {skill:.tool_input.skill} else {} end)
    + (if (.tool_input.file_path // .tool_input.path // "") != "" then {file:(.tool_input.file_path // .tool_input.path)} else {} end)

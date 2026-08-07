@@ -43,6 +43,13 @@ STALE_STATS_DAYS = 7
 EMPTY_TOOLS_MIN_EVENTS = 100  # empty tools map only alarming with real volume
 ERROR_RATE_THRESHOLD = 0.15   # SKILL.md flags ~10%; the digest stays quieter
 MIN_CALLS = 20                # ignore small samples
+# Edit-diagnostic tripwire. Measured baseline over 6,883 transcripts / 30d is
+# ~2.3% overall, so 5% is a genuine regression rather than a restatement of
+# normal. Kept separate from ERROR_RATE_THRESHOLD, which reads a different
+# source with a different denominator.
+EDIT_FAILURE_THRESHOLD = 0.05
+EDIT_MIN_CALLS = 200
+EDIT_STATS_MAX_AGE_DAYS = 3
 ZERO_USE_MIN = 3              # rig.json zero_use entries before surfacing
 RIG_MIN_EVENTS_SCANNED = 1000  # zero_use meaningless on a fresh install
 RIG_MAX_AGE_DAYS = 30          # a stale rig.json shouldn't nag forever
@@ -254,21 +261,60 @@ def build_digest_lines(data_dir: Path) -> list[str]:
             for name, t in tools.items():
                 if not isinstance(t, dict):
                     continue
-                calls = t.get("calls")
+                # The denominator is error-observable calls, never total
+                # calls: events from a source that cannot witness failures
+                # belong in neither numerator nor denominator. `errors` is
+                # None precisely when nothing was observable, so an
+                # unmeasured tool is skipped rather than reported as clean.
+                observed = t.get("error_observed_calls")
                 errors = t.get("errors")
-                if not isinstance(calls, int) or not isinstance(errors, int):
+                if not isinstance(observed, int) or not isinstance(errors, int):
                     continue
-                if calls < MIN_CALLS or errors / calls < ERROR_RATE_THRESHOLD:
+                if observed < MIN_CALLS or errors / observed < ERROR_RATE_THRESHOLD:
                     continue
-                rate = errors / calls
+                rate = errors / observed
                 if worst is None or rate > worst[0]:
-                    worst = (rate, name, errors, calls)
+                    worst = (rate, name, errors, observed)
         if worst is not None:
-            rate, name, errors, calls = worst
+            rate, name, errors, observed = worst
             lines.append(
-                f"{name} error rate is {round(rate * 100)}% ({errors}/{calls} "
-                "calls in 7d) — run /tool-time to investigate"
+                f"{name} error rate is {round(rate * 100)}% ({errors}/{observed} "
+                "observed calls in 7d) — run /tool-time to investigate"
             )
+
+    # (b2) Edit-diagnostic tripwire, from edit_stats.json (transcript-derived,
+    # the only source that can observe a tool failure). Names the dominant
+    # failure cause rather than a bare rate: "52% not_read_first" tells you
+    # what to change, "2.3% error rate" does not.
+    edit_stats = _load_json(data_dir / "edit_stats.json")
+    if edit_stats is not None:
+        generated = _parse_iso(edit_stats.get("generated"))
+        totals = edit_stats.get("totals")
+        kinds = edit_stats.get("failure_kinds")
+        if (
+            isinstance(totals, dict)
+            and isinstance(kinds, list)
+            and kinds
+            and generated is not None
+            and generated >= now - timedelta(days=EDIT_STATS_MAX_AGE_DAYS)
+        ):
+            resolved = totals.get("resolved_calls")
+            failure_rate = totals.get("failure_rate")
+            # failure_rate is None when nothing resolved — not a clean run.
+            if (
+                isinstance(resolved, int)
+                and resolved >= EDIT_MIN_CALLS
+                and isinstance(failure_rate, (int, float))
+                and failure_rate >= EDIT_FAILURE_THRESHOLD
+            ):
+                top = kinds[0]
+                if isinstance(top, dict) and top.get("kind"):
+                    share = top.get("share_of_failures")
+                    share_txt = f"{round(share * 100)}%" if isinstance(share, (int, float)) else "most"
+                    lines.append(
+                        f"edit failures {round(failure_rate * 100)}% of {resolved:,} calls in 7d — "
+                        f"{share_txt} are {top['kind']} — run edit_stats.py"
+                    )
 
     # (c) Rig tripwire: rig.json is written by rig.py and may not exist.
     # Gated on volume + freshness: a fresh install scans ~0 events, which

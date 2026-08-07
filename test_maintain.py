@@ -49,7 +49,7 @@ def _write_stats(
     total_events: int = 200,
 ) -> None:
     if tools is None:
-        tools = {"Read": {"calls": 100, "errors": 1, "rejections": 0}}
+        tools = {"Read": {"calls": 100, "error_observed_calls": 100, "errors": 1, "rejections": 0}}
     (data_dir / "stats.json").write_text(json.dumps({
         "generated": _ts_str(days_ago=generated_days_ago),
         "total_events": total_events,
@@ -284,7 +284,7 @@ class TestDigestErrorRate:
     def test_high_error_rate_flagged(self, tmp_path):
         (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
         _write_stats(tmp_path, tools={
-            "Edit": {"calls": 40, "errors": 10, "rejections": 0},
+            "Edit": {"calls": 40, "error_observed_calls": 40, "errors": 10, "rejections": 0},
         })
         lines = build_digest_lines(tmp_path)
         assert len(lines) == 1
@@ -295,8 +295,8 @@ class TestDigestErrorRate:
     def test_worst_offender_named(self, tmp_path):
         (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
         _write_stats(tmp_path, tools={
-            "Edit": {"calls": 40, "errors": 8, "rejections": 0},   # 20%
-            "Bash": {"calls": 30, "errors": 15, "rejections": 0},  # 50%
+            "Edit": {"calls": 40, "error_observed_calls": 40, "errors": 8, "rejections": 0},   # 20%
+            "Bash": {"calls": 30, "error_observed_calls": 30, "errors": 15, "rejections": 0},  # 50%
         })
         lines = build_digest_lines(tmp_path)
         assert len(lines) == 1
@@ -305,14 +305,14 @@ class TestDigestErrorRate:
     def test_below_min_calls_not_flagged(self, tmp_path):
         (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
         _write_stats(tmp_path, tools={
-            "Edit": {"calls": 10, "errors": 9, "rejections": 0},
+            "Edit": {"calls": 10, "error_observed_calls": 10, "errors": 9, "rejections": 0},
         })
         assert build_digest_lines(tmp_path) == []
 
     def test_below_rate_threshold_not_flagged(self, tmp_path):
         (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
         _write_stats(tmp_path, tools={
-            "Edit": {"calls": 100, "errors": 5, "rejections": 0},
+            "Edit": {"calls": 100, "error_observed_calls": 100, "errors": 5, "rejections": 0},
         })
         assert build_digest_lines(tmp_path) == []
 
@@ -384,7 +384,7 @@ class TestWriteDigest:
         # only a and b survive the cap
         (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
         _write_stats(tmp_path, generated_days_ago=8, tools={
-            "Edit": {"calls": 40, "errors": 10, "rejections": 0},
+            "Edit": {"calls": 40, "error_observed_calls": 40, "errors": 10, "rejections": 0},
         })
         _write_rig(tmp_path, ["alpha", "beta", "gamma"])
         write_digest(tmp_path)

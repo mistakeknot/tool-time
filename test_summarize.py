@@ -184,7 +184,9 @@ class TestComputeToolStatistics:
         ]
         stats = compute_tool_statistics(events)
         assert stats["tools"]["Edit"]["calls"] == 1
-        assert stats["tools"]["Edit"]["errors"] == 1
+        # The hook path cannot observe failures, so errors stays unmeasured
+        # rather than being fabricated from the payload.
+        assert stats["tools"]["Edit"]["errors"] is None
 
     def test_post_tool_use_only_stream_counts(self):
         """Regression: production logs contain ONLY PostToolUse events for
@@ -322,7 +324,7 @@ class TestMcpServerAggregation:
     def test_mcp_server_errors(self):
         events = [
             _make_event("mcp__slack__send", event_type="PreToolUse", seq=1),
-            _make_event("mcp__slack__send", event_type="PostToolUse", error="timeout", seq=2),
+            _make_event("mcp__slack__send", event_type="ToolUse", error="timeout", seq=2),
         ]
         stats = compute_tool_statistics(events)
         assert stats["mcp_servers"]["slack"]["calls"] == 1

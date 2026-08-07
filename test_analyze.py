@@ -95,7 +95,14 @@ class TestIsCallEvent:
 
 class TestIsErrorEvent:
     def test_post_tool_use_with_error(self):
-        assert is_error_event({"event": "PostToolUse", "error": "fail"}) is True
+        """A hook event can never report a failure.
+
+        Claude Code does not fire PostToolUse when a tool fails, so any
+        `error` on a PostToolUse event came from payload sniffing, not from
+        an observed failure. Treating it as real produced 20,517 phantom
+        errors before this was corrected.
+        """
+        assert is_error_event({"event": "PostToolUse", "error": "fail"}) is False
 
     def test_tool_use_with_error(self):
         assert is_error_event({"event": "ToolUse", "error": "fail"}) is True
@@ -263,9 +270,10 @@ class TestClassifySession:
         events = []
         for i in range(1, 11):
             events.append(_make_event("Bash", seq=i))
-        # Errors ride on PostToolUse call events (5/15 errors > 15%)
+        # Errors ride on transcript-derived ToolUse events — the only source
+        # that can witness a failure (5/5 observable errors > 15%).
         for i in range(1, 6):
-            events.append(_make_event("Bash", event_type="PostToolUse", error="fail", seq=10 + i))
+            events.append(_make_event("Bash", event_type="ToolUse", error="fail", seq=10 + i))
         assert classify_session(events) == "debugging"
 
     def test_building(self):
@@ -310,7 +318,7 @@ class TestClassifySession:
             events.append(_make_event("Edit", seq=i))
         # But also high errors (debugging threshold met)
         for i in range(11, 16):
-            events.append(_make_event("Edit", event_type="PostToolUse", error="fail", seq=i))
+            events.append(_make_event("Edit", event_type="ToolUse", error="fail", seq=i))
         result = classify_session(events)
         assert result == "debugging"
 
@@ -389,8 +397,8 @@ class TestComputeTrigrams:
 class TestComputeRetryPatterns:
     def test_file_based_retry_detected(self):
         events = [
-            _make_event("Edit", event_type="PostToolUse", error="not unique", seq=1, file="/a.py"),
-            _make_event("Edit", event_type="PostToolUse", seq=2, file="/a.py"),
+            _make_event("Edit", event_type="ToolUse", error="not unique", seq=1, file="/a.py"),
+            _make_event("Edit", event_type="ToolUse", seq=2, file="/a.py"),
         ]
         result = compute_retry_patterns({"s1": events})
         assert len(result) == 1
@@ -418,9 +426,9 @@ class TestComputeRetryPatterns:
         PreToolUse logging) between error and retry must not hide the
         retry — the scan looks for the next CALL event, not events[i+1]."""
         events = [
-            _make_event("Edit", event_type="PostToolUse", error="not unique", seq=1, file="/a.py"),
+            _make_event("Edit", event_type="ToolUse", error="not unique", seq=1, file="/a.py"),
             _make_event("Edit", event_type="PreToolUse", seq=2, file="/a.py"),
-            _make_event("Edit", event_type="PostToolUse", seq=3, file="/a.py"),
+            _make_event("Edit", event_type="ToolUse", seq=3, file="/a.py"),
         ]
         result = compute_retry_patterns({"s1": events})
         assert len(result) == 1
@@ -432,7 +440,7 @@ class TestComputeRetryPatterns:
         events = [
             _make_event("Edit", event_type="PostToolUse", error="fail", seq=1, file="/a.py"),
             _make_event("Read", event_type="PostToolUse", seq=2, file="/a.py"),
-            _make_event("Edit", event_type="PostToolUse", seq=3, file="/a.py"),
+            _make_event("Edit", event_type="ToolUse", seq=3, file="/a.py"),
         ]
         result = compute_retry_patterns({"s1": events})
         assert len(result) == 0

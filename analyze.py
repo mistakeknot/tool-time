@@ -53,12 +53,34 @@ def is_call_event(event: dict) -> bool:
     return event.get("event") in ("PostToolUse", "ToolUse")
 
 
+def is_error_observable_event(event: dict) -> bool:
+    """True when this event could have carried an error, had one occurred.
+
+    Only transcript-derived events (`ToolUse`) qualify. Claude Code does not
+    fire PostToolUse on tool failure, so hook events are silent on the
+    question — they are not evidence of success. Every error rate below uses
+    this as its denominator; using total calls instead would divide real
+    errors by a population that mostly could not have reported any.
+    """
+    return event.get("event") == "ToolUse"
+
+
 def is_error_event(event: dict) -> bool:
-    """True for events carrying error info (PostToolUse or ToolUse with error)."""
-    return (
-        event.get("event") in ("PostToolUse", "ToolUse")
-        and event.get("error") is not None
-    )
+    """True for events that actually recorded a tool failure."""
+    return is_error_observable_event(event) and event.get("error") is not None
+
+
+def error_rate(events: list[dict]) -> float | None:
+    """Error rate over error-observable events, or None if none were.
+
+    Returns None rather than 0.0 for an unobserved population: "no failures
+    were seen" and "nothing could have been seen" are different facts, and
+    only the first one is a rate.
+    """
+    observable = sum(1 for e in events if is_error_observable_event(e))
+    if observable == 0:
+        return None
+    return round(sum(1 for e in events if is_error_event(e)) / observable, 3)
 
 
 def normalize_tool_name(name: str) -> str:
@@ -173,6 +195,7 @@ def classify_session(events: list[dict]) -> str:
 
     tool_counts: Counter[str] = Counter(e.get("tool", "") for e in call_events)
     error_count = sum(1 for e in events if is_error_event(e))
+    observable_count = sum(1 for e in events if is_error_observable_event(e))
 
     # 1. Planning — but only if planning signals are >10% of total
     plan_mode = sum(
@@ -187,8 +210,10 @@ def classify_session(events: list[dict]) -> str:
     if planning_signals > 0 and planning_signals / total > 0.10:
         return "planning"
 
-    # 2. Debugging — require at least 3 errors AND >15% error rate
-    if total > 0 and error_count >= 3 and (error_count / total) > 0.15:
+    # 2. Debugging — require at least 3 errors AND >15% error rate, measured
+    # over error-observable events only. A session with no observable events
+    # cannot be classified as debugging: it has no error evidence either way.
+    if observable_count > 0 and error_count >= 3 and (error_count / observable_count) > 0.15:
         return "debugging"
     bash_count = tool_counts.get("Bash", 0) + tool_counts.get("shell", 0) + tool_counts.get("shell_command", 0) + tool_counts.get("exec_command", 0) + tool_counts.get("exec", 0)
     if total > 0 and bash_count / total > 0.4 and error_count > 3:
@@ -387,7 +412,7 @@ def compute_weekly_trends(events: list[dict], sessions: dict[str, list[dict]] | 
     Tool names are normalized for cross-source consistency.
     """
     weekly: dict[tuple[int, int], dict] = defaultdict(
-        lambda: {"events": 0, "errors": 0, "sessions": set(), "tools": Counter(), "call_events": 0}
+        lambda: {"events": 0, "errors": 0, "sessions": set(), "tools": Counter(), "call_events": 0, "observable": 0}
     )
 
     for event in events:
@@ -406,6 +431,8 @@ def compute_weekly_trends(events: list[dict], sessions: dict[str, list[dict]] | 
             tool = normalize_tool_name(event.get("tool", ""))
             weekly[key]["tools"][tool] += 1
 
+        if is_error_observable_event(event):
+            weekly[key]["observable"] += 1
         if is_error_event(event):
             weekly[key]["errors"] += 1
 
@@ -413,14 +440,16 @@ def compute_weekly_trends(events: list[dict], sessions: dict[str, list[dict]] | 
     for (year, week) in sorted(weekly):
         data = weekly[(year, week)]
         total = data["events"]
-        error_rate = round(data["errors"] / data["call_events"], 3) if data["call_events"] > 0 else 0.0
+        observable = data["observable"]
+        week_error_rate = round(data["errors"] / observable, 3) if observable > 0 else None
         result.append({
             "week": f"{year}-W{week:02d}",
             "iso_year": year,
             "iso_week": week,
             "events": total,
             "sessions": len(data["sessions"]),
-            "error_rate": error_rate,
+            "error_observed_calls": observable,
+            "error_rate": week_error_rate,
             "tools": dict(data["tools"].most_common(10)),
         })
 
@@ -458,9 +487,9 @@ def compute_time_patterns(events: list[dict], tz: Any = None) -> dict:
     if tz is None:
         tz = _get_local_tz()
 
-    by_hour: dict[int, dict] = defaultdict(lambda: {"events": 0, "errors": 0, "call_events": 0})
+    by_hour: dict[int, dict] = defaultdict(lambda: {"events": 0, "errors": 0, "call_events": 0, "observable": 0})
     day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    by_day: dict[str, dict] = defaultdict(lambda: {"events": 0, "errors": 0, "sessions": set()})
+    by_day: dict[str, dict] = defaultdict(lambda: {"events": 0, "errors": 0, "sessions": set(), "observable": 0})
 
     for event in events:
         ts = event.get("_ts")
@@ -479,32 +508,38 @@ def compute_time_patterns(events: list[dict], tz: Any = None) -> dict:
         if is_call_event(event):
             by_hour[hour]["call_events"] += 1
 
+        if is_error_observable_event(event):
+            by_hour[hour]["observable"] += 1
+            by_day[day]["observable"] += 1
+
         if is_error_event(event):
             by_hour[hour]["errors"] += 1
             by_day[day]["errors"] += 1
 
-    # Build hour list (0-23)
+    # Build hour list (0-23). error_rate is None where nothing was
+    # error-observable in that hour — an unmeasured hour must not read as a
+    # clean one, which is what a 0.0 would imply.
     hours = []
     for h in range(24):
         data = by_hour[h]
-        er = round(data["errors"] / data["call_events"], 3) if data["call_events"] > 0 else 0.0
-        hours.append({"hour": h, "events": data["events"], "error_rate": er})
+        er = round(data["errors"] / data["observable"], 3) if data["observable"] > 0 else None
+        hours.append({"hour": h, "events": data["events"], "error_observed_calls": data["observable"], "error_rate": er})
 
     # Build day list
     days = []
     for d in day_names:
         data = by_day[d]
         total = data["events"]
-        er = round(data["errors"] / total, 3) if total > 0 else 0.0
-        days.append({"day": d, "events": total, "sessions": len(data["sessions"]), "error_rate": er})
+        er = round(data["errors"] / data["observable"], 3) if data["observable"] > 0 else None
+        days.append({"day": d, "events": total, "sessions": len(data["sessions"]), "error_observed_calls": data["observable"], "error_rate": er})
 
     # Peaks
     peak_hour = max(range(24), key=lambda h: by_hour[h]["events"]) if any(by_hour[h]["events"] > 0 for h in range(24)) else 0
     peak_day = max(day_names, key=lambda d: by_day[d]["events"]) if any(by_day[d]["events"] > 0 for d in day_names) else "Monday"
     error_prone_hour = max(
         range(24),
-        key=lambda h: by_hour[h]["errors"] / by_hour[h]["call_events"] if by_hour[h]["call_events"] > 0 else 0,
-    ) if any(by_hour[h]["call_events"] > 0 for h in range(24)) else 0
+        key=lambda h: by_hour[h]["errors"] / by_hour[h]["observable"] if by_hour[h]["observable"] > 0 else 0,
+    ) if any(by_hour[h]["observable"] > 0 for h in range(24)) else None
 
     tz_name = str(tz)
     if hasattr(tz, "key"):
@@ -539,6 +574,7 @@ def compute_source_comparison(events: list[dict], sessions: dict[str, list[dict]
     for src, src_events in sorted(source_events.items()):
         call_count = sum(1 for e in src_events if is_call_event(e))
         error_count = sum(1 for e in src_events if is_error_event(e))
+        src_error_rate = error_rate(src_events)
 
         # Sessions for this source
         src_sessions = {
@@ -570,7 +606,7 @@ def compute_source_comparison(events: list[dict], sessions: dict[str, list[dict]
             "events": len(src_events),
             "sessions": len(src_sessions),
             "avg_tools_per_session": round(statistics.mean(tools_per), 1) if tools_per else 0,
-            "error_rate": round(error_count / call_count, 3) if call_count > 0 else 0.0,
+            "error_rate": src_error_rate,
             "top_tools": [t for t, _ in tool_counts.most_common(5)],
             "classification_mix": dict(class_mix.most_common()),
         }
@@ -596,6 +632,7 @@ def compute_project_breakdown(events: list[dict], sessions: dict[str, list[dict]
         proj_evts = project_events[proj]
         call_count = sum(1 for e in proj_evts if is_call_event(e))
         error_count = sum(1 for e in proj_evts if is_error_event(e))
+        proj_error_rate = error_rate(proj_evts)
 
         tool_counts: Counter[str] = Counter()
         for e in proj_evts:
@@ -618,7 +655,7 @@ def compute_project_breakdown(events: list[dict], sessions: dict[str, list[dict]
             "sessions": len(project_sessions[proj]),
             "top_tools": [t for t, _ in tool_counts.most_common(5)],
             "primary_classification": primary_class,
-            "error_rate": round(error_count / call_count, 3) if call_count > 0 else 0.0,
+            "error_rate": proj_error_rate,
         }
 
     return result
