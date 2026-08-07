@@ -239,3 +239,72 @@ def test_quarantine_is_idempotent():
     record = {"event": "PostToolUse", "error": None, "error_legacy_unreliable": "old"}
     _, changed = module.quarantine_line(record)
     assert changed is False
+
+
+# --- digest tripwire (maintain.py) ---
+
+class TestEditDigestTripwire:
+    """The tripwire must fire on real regressions and stay silent otherwise.
+
+    The silence cases matter more than the firing case: every one of them is
+    a shape that previously produced a false alarm at every session start.
+    """
+
+    @staticmethod
+    def _probe(tmp_path, edit_stats, stats_tools=None):
+        import json
+        from datetime import datetime, timezone
+        from maintain import build_digest_lines
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (tmp_path / "events.jsonl").write_text(
+            json.dumps({"v": 1, "id": "s-1", "ts": now, "event": "PostToolUse", "tool": "Edit"}) + "\n")
+        (tmp_path / "stats.json").write_text(json.dumps({
+            "generated": now, "total_events": 200,
+            "tools": stats_tools or {"Read": {"calls": 100, "error_observed_calls": 0,
+                                              "errors": None, "rejections": None}},
+        }))
+        if edit_stats is not None:
+            edit_stats.setdefault("generated", now)
+            (tmp_path / "edit_stats.json").write_text(json.dumps(edit_stats))
+        return build_digest_lines(tmp_path)
+
+    def test_fires_on_real_regression_and_names_the_cause(self, tmp_path):
+        lines = self._probe(tmp_path, {
+            "totals": {"resolved_calls": 1000, "failed": 80, "failure_rate": 0.08},
+            "failure_kinds": [{"kind": "not_read_first", "count": 50, "share_of_failures": 0.62}],
+        })
+        assert len(lines) == 1
+        assert "not_read_first" in lines[0]  # the cause, not just a rate
+        assert "8%" in lines[0]
+
+    def test_silent_at_measured_baseline(self, tmp_path):
+        """2.3% is the measured normal, not a regression."""
+        assert self._probe(tmp_path, {
+            "totals": {"resolved_calls": 1000, "failed": 23, "failure_rate": 0.023},
+            "failure_kinds": [{"kind": "not_read_first", "count": 12, "share_of_failures": 0.52}],
+        }) == []
+
+    def test_silent_when_rate_is_none(self, tmp_path):
+        """An unmeasured population must not alarm and must not crash."""
+        assert self._probe(tmp_path, {
+            "totals": {"resolved_calls": 0, "failed": 0, "failure_rate": None},
+            "failure_kinds": [],
+        }) == []
+
+    def test_silent_on_stale_artifact(self, tmp_path):
+        from datetime import datetime, timedelta, timezone
+        stale = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert self._probe(tmp_path, {
+            "generated": stale,
+            "totals": {"resolved_calls": 1000, "failed": 800, "failure_rate": 0.8},
+            "failure_kinds": [{"kind": "not_read_first", "count": 500, "share_of_failures": 0.62}],
+        }) == []
+
+    def test_silent_without_artifact(self, tmp_path):
+        assert self._probe(tmp_path, None) == []
+
+    def test_phantom_error_rate_shape_stays_silent(self, tmp_path):
+        """The original bug: 203 calls, 103 'errors', 0 of them observable."""
+        assert self._probe(tmp_path, None, stats_tools={
+            "Edit": {"calls": 203, "error_observed_calls": 0, "errors": None, "rejections": None},
+        }) == []
