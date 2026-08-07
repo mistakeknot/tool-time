@@ -303,8 +303,21 @@ class TestEditDigestTripwire:
     def test_silent_without_artifact(self, tmp_path):
         assert self._probe(tmp_path, None) == []
 
-    def test_phantom_error_rate_shape_stays_silent(self, tmp_path):
-        """The original bug: 203 calls, 103 'errors', 0 of them observable."""
-        assert self._probe(tmp_path, None, stats_tools={
+    def test_phantom_error_rate_shape_claims_no_rate(self, tmp_path):
+        """The original bug: 203 calls, 103 'errors', 0 of them observable.
+
+        This asserted blanket silence until 2026-08-07. That encoded the
+        wrong invariant: what must never happen is *claiming a rate* over a
+        population that could not report errors. Reporting that the
+        population was unmeasured is the correct behaviour, and is now what
+        the measurement-down tripwire exists to say. Silence here would mean
+        a dead pipeline and a clean run look identical.
+        """
+        lines = self._probe(tmp_path, None, stats_tools={
             "Edit": {"calls": 203, "error_observed_calls": 0, "errors": None, "rejections": None},
-        }) == []
+        })
+        assert not any("error rate" in ln for ln in lines), (
+            f"claimed a rate over an unobservable population: {lines}"
+        )
+        assert any("measurement is down" in ln for ln in lines)
+        assert "203" in lines[0], "must name the unmeasured denominator"

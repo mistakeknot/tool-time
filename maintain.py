@@ -50,6 +50,12 @@ MIN_CALLS = 20                # ignore small samples
 EDIT_FAILURE_THRESHOLD = 0.05
 EDIT_MIN_CALLS = 200
 EDIT_STATS_MAX_AGE_DAYS = 3
+# Error measurement is supplied solely by backfill.py's transcript events.
+# If that stops, every `errors` reverts to None and each tripwire below skips
+# its tool as unmeasured — silently, and indistinguishably from healthy. This
+# floor is the volume above which "zero error-observable calls" means the
+# pipeline died rather than the machine being idle.
+UNMEASURED_MIN_CALLS = 200
 ZERO_USE_MIN = 3              # rig.json zero_use entries before surfacing
 RIG_MIN_EVENTS_SCANNED = 1000  # zero_use meaningless on a fresh install
 RIG_MAX_AGE_DAYS = 30          # a stale rig.json shouldn't nag forever
@@ -252,6 +258,33 @@ def build_digest_lines(data_dir: Path) -> list[str]:
                 "stats are stale/empty while events are fresh — pipeline may "
                 "be broken; run /tool-time to investigate"
             )
+
+    # (b0) Measurement self-check: are we able to see errors at all?
+    #
+    # Every tripwire below skips a tool whose `errors` is None, which is
+    # correct — unmeasured is not zero. But applied to ALL tools it becomes
+    # indistinguishable from a clean run: a dead backfill produces exactly
+    # the same silence as a session with no failures. This fires on that
+    # silence, so the absence of a signal is itself reported.
+    if stats is not None:
+        tools = stats.get("tools")
+        if isinstance(tools, dict) and tools:
+            calls = 0
+            observed = 0
+            for t in tools.values():
+                if not isinstance(t, dict):
+                    continue
+                c = t.get("calls")
+                o = t.get("error_observed_calls")
+                if isinstance(c, int):
+                    calls += c
+                if isinstance(o, int):
+                    observed += o
+            if calls >= UNMEASURED_MIN_CALLS and observed == 0:
+                lines.append(
+                    f"error measurement is down — 0 of {calls:,} calls in 7d were "
+                    "error-observable; backfill.py has not run (see CLAUDE.md)"
+                )
 
     # (b) Error-rate tripwire: name the worst offender with numbers.
     if stats is not None:

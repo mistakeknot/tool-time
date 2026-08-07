@@ -90,6 +90,22 @@ Backfill runs from the SessionEnd hook, backgrounded, at most once per 6h
 parsed until the next run; that lag is immaterial against a 7-day window and
 never double-counts.
 
+**Backfill and rotation share `.rotate.lock`.** `rotate_events()` rewrites
+events.jsonl read-filter-replace, and its docstring accepts the resulting
+loss window as bounded — which was true when hook.sh was the only appender
+(one line, microseconds) and false once backfill appended ~50k lines over
+seconds from the same SessionEnd. Backfill now takes the lock, covering
+`load_existing_ids()` as well as the writes, and declines rather than writing
+into a file being rewritten. If you add a third writer, it takes the lock too.
+
+**The digest reports when measurement stops.** Every tripwire skips a tool
+whose `errors` is None, which is correct — but applied to all tools it makes
+a dead backfill indistinguishable from a clean run. The measurement-down
+tripwire fires on that silence (0 error-observable calls above
+`UNMEASURED_MIN_CALLS`). Any digest line quoting a rate must also name its
+denominator; `test_maintain.py::TestDigestRateAlwaysNamesDenominator`
+enforces it.
+
 ## Design Decisions (Do Not Re-Ask)
 - Agent analyzes data, not hardcoded heuristics
 - summarize.py is pure data preparation — no opinions or thresholds

@@ -4,6 +4,7 @@
 import fcntl
 import gzip
 import json
+import re
 import os
 import subprocess
 import sys
@@ -315,6 +316,104 @@ class TestDigestErrorRate:
             "Edit": {"calls": 100, "error_observed_calls": 100, "errors": 5, "rejections": 0},
         })
         assert build_digest_lines(tmp_path) == []
+
+
+class TestDigestMeasurementDown:
+    """The hardest failure to see: a dead error pipeline and a clean run
+    produce identical silence, because every tripwire correctly skips a
+    tool whose `errors` is None."""
+
+    def test_zero_observable_at_volume_is_flagged(self, tmp_path):
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 300, "error_observed_calls": 0, "errors": None, "rejections": None},
+            "Read": {"calls": 200, "error_observed_calls": 0, "errors": None, "rejections": None},
+        })
+        lines = build_digest_lines(tmp_path)
+        assert len(lines) == 1
+        assert "error measurement is down" in lines[0]
+        assert "500" in lines[0], "must name the unmeasured denominator"
+
+    def test_silent_below_volume_floor(self, tmp_path):
+        """An idle machine is not a broken pipeline."""
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 5, "error_observed_calls": 0, "errors": None, "rejections": None},
+        })
+        assert build_digest_lines(tmp_path) == []
+
+    def test_silent_when_any_measurement_exists(self, tmp_path):
+        """Partial coverage is backfill lagging, not backfill dead."""
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 300, "error_observed_calls": 0, "errors": None, "rejections": None},
+            "Read": {"calls": 200, "error_observed_calls": 4, "errors": 0, "rejections": 0},
+        })
+        assert build_digest_lines(tmp_path) == []
+
+    def test_silent_when_errors_are_measured_and_zero(self, tmp_path):
+        """A genuinely clean run must stay quiet."""
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 300, "error_observed_calls": 300, "errors": 0, "rejections": 0},
+        })
+        assert build_digest_lines(tmp_path) == []
+
+    def test_does_not_mask_a_real_error_rate(self, tmp_path):
+        """When measurement works, the worst-offender line still wins its slot."""
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 300, "error_observed_calls": 40, "errors": 10, "rejections": 0},
+        })
+        lines = build_digest_lines(tmp_path)
+        assert any("Edit" in ln and "10/40" in ln for ln in lines)
+        assert not any("measurement is down" in ln for ln in lines)
+
+
+class TestDigestRateAlwaysNamesDenominator:
+    """A percentage without its denominator is unactionable and, worse,
+    unfalsifiable — '51% error rate' read plausible for months while being
+    computed over a population that could not report errors at all."""
+
+    RATE = re.compile(r"\d+%")
+    # "10/40 observed calls" or "of 1,234 calls"
+    DENOM = re.compile(r"\d[\d,]*/\d[\d,]*|of [\d,]+ calls")
+
+    def _assert_ok(self, lines):
+        for ln in lines:
+            if self.RATE.search(ln):
+                assert self.DENOM.search(ln), f"rate without denominator: {ln!r}"
+
+    def test_tool_error_rate_line(self, tmp_path):
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 40, "error_observed_calls": 40, "errors": 10, "rejections": 0},
+        })
+        lines = build_digest_lines(tmp_path)
+        assert lines
+        self._assert_ok(lines)
+
+    def test_edit_diagnostic_line(self, tmp_path):
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={})
+        (tmp_path / "edit_stats.json").write_text(json.dumps({
+            "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "totals": {"resolved_calls": 1000, "failed": 80, "failure_rate": 0.08},
+            "failure_kinds": [{"kind": "not_read_first", "count": 50,
+                               "share_of_failures": 0.62, "class": "workflow"}],
+        }))
+        lines = build_digest_lines(tmp_path)
+        assert lines
+        self._assert_ok(lines)
+
+    def test_measurement_down_line(self, tmp_path):
+        (tmp_path / "events.jsonl").write_text(_make_line() + "\n")
+        _write_stats(tmp_path, tools={
+            "Edit": {"calls": 300, "error_observed_calls": 0, "errors": None, "rejections": None},
+        })
+        lines = build_digest_lines(tmp_path)
+        assert lines
+        self._assert_ok(lines)
 
 
 class TestDigestRig:
