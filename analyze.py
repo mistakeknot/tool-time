@@ -88,19 +88,54 @@ def normalize_tool_name(name: str) -> str:
     return TOOL_ALIASES.get(name, name)
 
 
-_SESSION_ID_RE = re.compile(r"^(.+)-(\d+)$")
+_SESSION_ID_RE = re.compile(r"^(.+)-t?(\d+)$")
 
 
 def extract_session_id(event_id: str) -> str:
-    """Extract session UUID from event ID (format: uuid-seq).
+    """Extract session UUID from event ID (format: uuid-seq or uuid-tseq).
 
     Handles UUIDs with internal hyphens (RFC 4122) and multi-digit
-    sequence numbers by matching the last -digits suffix.
+    sequence numbers by matching the last -digits suffix. Transcript-derived
+    ids carry a `t` namespace prefix on the sequence (see parsers.py); it is
+    matched here so the fallback still works, but prefer session_of().
     """
     m = _SESSION_ID_RE.match(event_id)
     if m:
         return m.group(1)
     return event_id
+
+
+def session_of(event: dict[str, Any]) -> str:
+    """Session an event belongs to.
+
+    Prefers the explicit `session` field. Only events written by the hook
+    lack it, and those are always `<uuid>-<int>`, which the regex handles.
+    Deriving the session by string surgery is the fallback, not the contract.
+    """
+    sid = event.get("session")
+    if isinstance(sid, str) and sid:
+        return sid
+    return extract_session_id(event.get("id", ""))
+
+
+def prefer_transcript_events(events: list[dict]) -> list[dict]:
+    """Drop hook events for any session that also has transcript events.
+
+    Both paths record the same tool call, so once backfill.py has parsed a
+    session's transcript, keeping its PostToolUse events double-counts every
+    call in it. Per session rather than globally, because backfill coverage
+    is per session. Within a session the transcript record dominates: it
+    carries the failures the hook path structurally cannot observe.
+    """
+    transcript_sessions = {
+        session_of(e) for e in events if e.get("event") == "ToolUse"
+    }
+    if not transcript_sessions:
+        return events
+    return [
+        e for e in events
+        if e.get("event") != "PostToolUse" or session_of(e) not in transcript_sessions
+    ]
 
 
 def parse_timestamp(ts_raw: Any) -> datetime | None:
@@ -162,14 +197,14 @@ def load_all_events(
 
         events.append(event)
 
-    return events
+    return prefer_transcript_events(events)
 
 
 def group_by_session(events: list[dict]) -> dict[str, list[dict]]:
     """Group events by session ID, sort each group by timestamp."""
     sessions: dict[str, list[dict]] = defaultdict(list)
     for event in events:
-        sid = extract_session_id(event["id"])
+        sid = session_of(event)
         sessions[sid].append(event)
     for sid in sessions:
         sessions[sid].sort(key=lambda e: e["_ts"])
@@ -423,7 +458,7 @@ def compute_weekly_trends(events: list[dict], sessions: dict[str, list[dict]] | 
         key = (iso[0], iso[1])  # (iso_year, iso_week)
 
         weekly[key]["events"] += 1
-        sid = extract_session_id(event["id"])
+        sid = session_of(event)
         weekly[key]["sessions"].add(sid)
 
         if is_call_event(event):
@@ -502,7 +537,7 @@ def compute_time_patterns(events: list[dict], tz: Any = None) -> dict:
         by_hour[hour]["events"] += 1
         by_day[day]["events"] += 1
 
-        sid = extract_session_id(event["id"])
+        sid = session_of(event)
         by_day[day]["sessions"].add(sid)
 
         if is_call_event(event):
@@ -566,7 +601,7 @@ def compute_source_comparison(events: list[dict], sessions: dict[str, list[dict]
     for event in events:
         src = event.get("source") or "unknown"
         source_events[src].append(event)
-        sid = extract_session_id(event["id"])
+        sid = session_of(event)
         if sid not in session_source:
             session_source[sid] = src
 
@@ -624,7 +659,7 @@ def compute_project_breakdown(events: list[dict], sessions: dict[str, list[dict]
     for event in events:
         proj = event.get("project", "unknown")
         project_events[proj].append(event)
-        sid = extract_session_id(event["id"])
+        sid = session_of(event)
         project_sessions[proj].add(sid)
 
     result = {}

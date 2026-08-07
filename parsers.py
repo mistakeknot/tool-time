@@ -11,9 +11,23 @@ from pathlib import Path
 from typing import Generator
 
 # Unified event schema (v1)
-# {"v":1, "id":"<session>-<seq>", "ts":"<iso8601>", "event":"ToolUse",
-#  "tool":"<name>", "project":"<cwd>", "error":null,
+# {"v":1, "id":"<session>-t<seq>", "ts":"<iso8601>", "event":"ToolUse",
+#  "tool":"<name>", "project":"<cwd>", "error":null, "session":"<session>",
 #  "source":"claude-code"|"codex"|"openclaw", "file":null|"<path>"}
+#
+# The `t` in `-t<seq>` is an id NAMESPACE, not decoration. hooks/hook.sh emits
+# `<session>-<seq>` with a bare integer from a per-session counter file that
+# ticks on five hook events (PreToolUse, PostToolUse, UserPromptSubmit, Stop,
+# SubagentStop). This module's seq ticks only on tool_use blocks. Same session,
+# same format, different sequences — so backfill.py's dedup-by-id saw the
+# hook's `<uuid>-7` and silently dropped this parser's unrelated `<uuid>-7`.
+# Every transcript-derived event for any session the hook had touched was
+# discarded, which is why stats.json reported errors as None: the only source
+# that can observe a tool failure never reached the file.
+#
+# `session` is emitted explicitly for the same reason. Deriving it by string
+# surgery on the id (rsplit / ^(.+)-(\d+)$) couples every consumer to the id
+# format; consumers must prefer this field and treat the id as opaque.
 
 
 def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
@@ -70,12 +84,13 @@ def parse_claude_code(session_path: Path) -> Generator[dict, None, None]:
                     skill_name = tool_input.get("skill") if tool_name == "Skill" else None
                     event_dict = {
                         "v": 1,
-                        "id": f"{session_id}-{seq}",
+                        "id": f"{session_id}-t{seq}",
                         "ts": ts,
                         "event": "ToolUse",
                         "tool": tool_name,
                         "project": cwd,
                         "error": None,
+                        "session": session_id,
                         "source": "claude-code",
                     }
                     if model:
@@ -166,12 +181,13 @@ def parse_codex(session_path: Path) -> Generator[dict, None, None]:
                 pass
             event_dict = {
                 "v": 1,
-                "id": f"{session_id}-{seq}",
+                "id": f"{session_id}-t{seq}",
                 "ts": ts,
                 "event": "ToolUse",
                 "tool": tool_name,
                 "project": cwd,
                 "error": None,
+                "session": session_id,
                 "source": "codex",
             }
             if file_path:
@@ -262,12 +278,13 @@ def parse_openclaw(session_path: Path) -> Generator[dict, None, None]:
                     file_path = args.get("path") or args.get("file_path") or None
                     event_dict = {
                         "v": 1,
-                        "id": f"{session_id}-{seq}",
+                        "id": f"{session_id}-t{seq}",
                         "ts": ts,
                         "event": "ToolUse",
                         "tool": tool_name,
                         "project": cwd,
                         "error": None,
+                        "session": session_id,
                         "source": "openclaw",
                     }
                     if model:

@@ -47,6 +47,41 @@ def parse_event_ts(ts_raw: str | None) -> datetime | None:
         return None
 
 
+def session_of(event: dict[str, Any]) -> str:
+    """Session an event belongs to.
+
+    Prefers the explicit `session` field written by parsers.py. Hook events
+    lack it and are always `<uuid>-<int>`, so id surgery is the fallback.
+    """
+    sid = event.get("session")
+    if isinstance(sid, str) and sid:
+        return sid
+    return str(event.get("id", "")).rsplit("-", 1)[0]
+
+
+def prefer_transcript_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop hook events for any session that also has transcript events.
+
+    Both paths record the same tool call — the hook at PostToolUse, the
+    parser from the transcript — so once backfill.py runs, every call in the
+    overlap is counted twice and every per-tool total is inflated.
+
+    The preference is per session, not global, because coverage is per
+    session: backfill only reaches sessions whose transcripts it has parsed.
+    Within a session the transcript record strictly dominates, since it also
+    carries the failures the hook never sees.
+    """
+    transcript_sessions = {
+        session_of(e) for e in events if e.get("event") == "ToolUse"
+    }
+    if not transcript_sessions:
+        return events
+    return [
+        e for e in events
+        if e.get("event") != "PostToolUse" or session_of(e) not in transcript_sessions
+    ]
+
+
 def load_events(
     days: int = LOOKBACK_DAYS,
     project: str | None = None,
@@ -69,7 +104,7 @@ def load_events(
                 events.append(ev)
         except (json.JSONDecodeError, KeyError):
             continue
-    return events
+    return prefer_transcript_events(events)
 
 
 def scan_installed_plugins(
@@ -164,7 +199,7 @@ def compute_tool_statistics(events: list[dict[str, Any]]) -> dict[str, Any]:
                 else:
                     skill_counts[skill_name] += 1
 
-            session_id = ev["id"].rsplit("-", 1)[0]
+            session_id = session_of(ev)
             session_file_ops[session_id].append((tool, file_path))
 
             ts = parse_event_ts(ev.get("ts"))

@@ -59,6 +59,37 @@ Consequences to preserve:
 - Error truth comes from transcripts (`is_error`), via `edit_stats.py` or
   `backfill.py`-derived `event: "ToolUse"` records.
 
+## The two event sources (read before touching ids or counts)
+`events.jsonl` is fed by two paths that record the *same* tool calls:
+
+| | `event` | ids | sees failures? |
+|---|---|---|---|
+| `hooks/hook.sh` | `PostToolUse` | `<session>-<int>` | never |
+| `backfill.py` → `parsers.py` | `ToolUse` | `<session>-t<int>` | yes (`is_error`) |
+
+Two invariants hold this together, and both fail silently if broken:
+
+1. **The id namespaces must stay disjoint.** They were not until 2026-08-07:
+   both emitted `<session>-<int>`, from counters that tick on different
+   things (the hook's on five hook events, the parser's on tool calls only).
+   `backfill.load_existing_ids()` therefore matched a hook id against an
+   unrelated parser event and dropped it. Every transcript event for every
+   hook-covered session was discarded — which is why `errors` was `None`
+   everywhere. The `t` prefix is what keeps them apart.
+2. **Never count both sources for one session.** `prefer_transcript_events()`
+   (in both `summarize.py` and `analyze.py`) drops hook events for any
+   session that has transcript events. Without it, every call in the overlap
+   counts twice. The preference is per *session*, because backfill coverage
+   is per session — a global rule would erase sessions backfill never reached.
+
+Prefer `session_of(event)` over parsing the id. The `session` field is
+authoritative; id surgery is a fallback for hook events only.
+
+Backfill runs from the SessionEnd hook, backgrounded, at most once per 6h
+(`--days 2`, ~5s over ~450 transcripts). A session that just ended may not be
+parsed until the next run; that lag is immaterial against a 7-day window and
+never double-counts.
+
 ## Design Decisions (Do Not Re-Ask)
 - Agent analyzes data, not hardcoded heuristics
 - summarize.py is pure data preparation — no opinions or thresholds

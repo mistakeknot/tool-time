@@ -25,6 +25,22 @@ EVENT_NAME=$(echo "$INPUT" | jq -r '.hook_event_name // ""')
 if [ "$EVENT_NAME" = "SessionEnd" ]; then
   SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // ""')
   [ -n "$SESSION_ID" ] && rm -f "$DATA_DIR/.seq-${SESSION_ID}"
+  # Land transcript-derived events BEFORE summarize.py reads them. This is
+  # the only path that supplies error-observable events (`event:"ToolUse"`);
+  # without it every error count in stats.json is None, because the hook
+  # cannot see a failure (see the note above the jq filter below).
+  #
+  # Backgrounded and rate-limited to once every 6h: a 2-day parse takes ~5s
+  # over ~450 transcripts, too slow to sit in the SessionEnd path. The cost
+  # of backgrounding is that the session just ended may not be parsed until
+  # the next run — immaterial against a 7-day stats window, and never a
+  # double count, because summarize.py drops hook events only for sessions
+  # a transcript actually covers.
+  BACKFILL_STAMP="$DATA_DIR/.backfill-last"
+  if [ ! -f "$BACKFILL_STAMP" ] || [ -z "$(find "$BACKFILL_STAMP" -mmin -360 2>/dev/null)" ]; then
+    touch "$BACKFILL_STAMP"
+    python3 "$PLUGIN_ROOT/backfill.py" --days 2 --quiet </dev/null >/dev/null 2>&1 &
+  fi
   # Only the community upload is gated on a successful stats refresh
   if python3 "$PLUGIN_ROOT/summarize.py" 2>/dev/null; then
     python3 "$PLUGIN_ROOT/upload.py" </dev/null >/dev/null 2>&1 &
