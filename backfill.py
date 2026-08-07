@@ -15,9 +15,15 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # non-POSIX
+    fcntl = None  # type: ignore[assignment]
 
 from parsers import (
     find_claude_code_sessions,
@@ -30,6 +36,53 @@ from parsers import (
 
 DATA_DIR = Path.home() / ".claude" / "tool-time"
 EVENTS_FILE = DATA_DIR / "events.jsonl"
+LOCK_FILE = DATA_DIR / ".rotate.lock"
+LOCK_TIMEOUT_SECS = 30
+
+
+class RotationBusy(Exception):
+    """maintain.py is rewriting events.jsonl; writing now would be lost."""
+
+
+def acquire_rotate_lock(timeout: float | None = None) -> int | None:
+    """Take maintain.py's rotation lock for the duration of our appends.
+
+    rotate_events() rewrites events.jsonl read-filter-replace, so anything
+    appended between its read and its os.replace is lost. That was an
+    accepted, bounded risk while hook.sh was the only appender — one line,
+    microseconds. This module appends tens of thousands of lines over
+    seconds, which overlaps essentially the whole rewrite.
+
+    rotate_events takes this same lock LOCK_EX|LOCK_NB and skips silently
+    when it cannot get it, so holding it here costs at most one deferred
+    rotation. We block rather than skip, because rotation is short.
+
+    Returns the fd to close (releasing the lock), or None if locking is
+    unavailable on this platform. Raises RotationBusy on timeout: backfill
+    is idempotent and re-runs within hours, so writing anyway — into a file
+    being rewritten — is strictly worse than not writing.
+    """
+    # Read the module constants at call time, not as parameter defaults:
+    # a default binds at def time, so overriding LOCK_TIMEOUT_SECS (in a
+    # test, or at runtime) would silently have no effect.
+    if timeout is None:
+        timeout = LOCK_TIMEOUT_SECS
+    if fcntl is None:
+        return None
+    LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(LOCK_FILE, os.O_CREAT | os.O_WRONLY, 0o644)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except OSError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                raise RotationBusy(
+                    f"could not acquire {LOCK_FILE} within {timeout}s"
+                )
+            time.sleep(0.25)
 
 
 def load_existing_ids() -> set[str]:
@@ -83,7 +136,6 @@ def main() -> None:
     args = ap.parse_args()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    existing_ids = load_existing_ids()
 
     sources = [
         ("claude-code", recent(find_claude_code_sessions(), args.days), parse_claude_code),
@@ -104,6 +156,17 @@ def main() -> None:
     tools: Counter[str] = Counter()
     by_source: Counter[str] = Counter()
     with_error = 0
+
+    # The lock must cover load_existing_ids() as well as the appends. A
+    # rotation landing between the two would archive ids we still hold,
+    # and we would skip those events as duplicates against a file that no
+    # longer contains them.
+    try:
+        lock_fd = acquire_rotate_lock()
+    except RotationBusy as e:
+        print(f"backfill skipped: {e}", file=sys.stderr)
+        return
+    existing_ids = load_existing_ids()
 
     # O_APPEND + one write() per line. hooks/hook.sh appends to this same file
     # concurrently; a buffered multi-line flush can interleave with its writes
@@ -131,6 +194,8 @@ def main() -> None:
                     print(f"  Error parsing {path.name}: {e}", file=sys.stderr)
     finally:
         os.close(fd)
+        if lock_fd is not None:
+            os.close(lock_fd)  # releases the flock
 
     say("\nBackfill complete:")
     say(f"  {new_events} new events written")

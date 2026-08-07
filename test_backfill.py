@@ -8,6 +8,7 @@ these raise, so they have to be asserted directly.
 """
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -159,6 +160,7 @@ def test_backfill_is_idempotent(tmp_path, monkeypatch):
     events_file = tmp_path / "events.jsonl"
     monkeypatch.setattr(backfill, "EVENTS_FILE", events_file)
     monkeypatch.setattr(backfill, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backfill, "LOCK_FILE", tmp_path / ".rotate.lock")
     t = write_transcript(tmp_path, [("Edit", "/a.py", True, "boom"),
                                     ("Read", "/a.py", False, "ok")])
     monkeypatch.setattr(backfill, "find_claude_code_sessions", lambda: [t])
@@ -196,3 +198,114 @@ def test_backfill_cli_runs():
     )
     assert r.returncode == 0, r.stderr
     assert "--days" in r.stdout
+
+
+# --- rotation race ---
+
+def test_backfill_skips_while_rotation_holds_the_lock(tmp_path, monkeypatch):
+    """maintain.py rewrites events.jsonl read-filter-replace. Appending into
+    that window loses the lines, so backfill must decline, not race."""
+    import fcntl
+
+    import backfill
+
+    monkeypatch.setattr(backfill, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backfill, "EVENTS_FILE", tmp_path / "events.jsonl")
+    monkeypatch.setattr(backfill, "LOCK_FILE", tmp_path / ".rotate.lock")
+    monkeypatch.setattr(backfill, "LOCK_TIMEOUT_SECS", 0.5)
+
+    t = write_transcript(tmp_path, [("Edit", "/a.py", True, "boom")])
+    monkeypatch.setattr(backfill, "find_claude_code_sessions", lambda: [t])
+    monkeypatch.setattr(backfill, "find_codex_sessions", lambda: [])
+    monkeypatch.setattr(backfill, "find_openclaw_sessions", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["backfill.py", "--quiet"])
+
+    held = os.open(tmp_path / ".rotate.lock", os.O_CREAT | os.O_WRONLY, 0o644)
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        backfill.main()  # must return without writing, not hang or raise
+    finally:
+        os.close(held)
+
+    assert not (tmp_path / "events.jsonl").exists(), (
+        "backfill wrote into a file being rotated"
+    )
+
+
+def test_backfill_writes_once_the_lock_is_free(tmp_path, monkeypatch):
+    """The skip above must be a deferral, not a permanent refusal."""
+    import backfill
+
+    monkeypatch.setattr(backfill, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backfill, "EVENTS_FILE", tmp_path / "events.jsonl")
+    monkeypatch.setattr(backfill, "LOCK_FILE", tmp_path / ".rotate.lock")
+    monkeypatch.setattr(backfill, "LOCK_TIMEOUT_SECS", 0.5)
+
+    t = write_transcript(tmp_path, [("Edit", "/a.py", True, "boom")])
+    monkeypatch.setattr(backfill, "find_claude_code_sessions", lambda: [t])
+    monkeypatch.setattr(backfill, "find_codex_sessions", lambda: [])
+    monkeypatch.setattr(backfill, "find_openclaw_sessions", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["backfill.py", "--quiet"])
+
+    backfill.main()
+    assert len((tmp_path / "events.jsonl").read_text().splitlines()) == 1
+
+
+def test_lock_is_released_after_a_successful_run(tmp_path, monkeypatch):
+    """A leaked flock would block every future rotation silently."""
+    import fcntl
+
+    import backfill
+
+    monkeypatch.setattr(backfill, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backfill, "EVENTS_FILE", tmp_path / "events.jsonl")
+    monkeypatch.setattr(backfill, "LOCK_FILE", tmp_path / ".rotate.lock")
+    t = write_transcript(tmp_path, [("Read", "/a.py", False, "ok")])
+    monkeypatch.setattr(backfill, "find_claude_code_sessions", lambda: [t])
+    monkeypatch.setattr(backfill, "find_codex_sessions", lambda: [])
+    monkeypatch.setattr(backfill, "find_openclaw_sessions", lambda: [])
+    monkeypatch.setattr(sys, "argv", ["backfill.py", "--quiet"])
+    backfill.main()
+
+    fd = os.open(tmp_path / ".rotate.lock", os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # must not raise
+    finally:
+        os.close(fd)
+
+
+def test_rotation_defers_while_backfill_holds_the_lock(tmp_path, monkeypatch):
+    """The invariant from the other side: maintain.py must not rewrite
+    events.jsonl while backfill is appending to it. Both must agree on the
+    same lock path, which is easy to break silently by moving either file.
+    """
+    import backfill
+    import maintain
+
+    monkeypatch.setattr(backfill, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(backfill, "LOCK_FILE", tmp_path / ".rotate.lock")
+    monkeypatch.setattr(maintain, "ROTATE_SIZE_BYTES", 1024)
+
+    events = tmp_path / "events.jsonl"
+    old = json.dumps({"id": "s-1", "ts": "2020-01-01T00:00:00Z",
+                      "event": "PostToolUse", "tool": "Bash"})
+    events.write_text((old + "\n") * 200)
+    before = events.read_text()
+    assert events.stat().st_size > 1024, "fixture must exceed the rotate threshold"
+
+    lock_fd = backfill.acquire_rotate_lock(timeout=1)
+    assert lock_fd is not None, "flock unavailable — this test proves nothing"
+    try:
+        maintain.rotate_events(tmp_path)
+    finally:
+        os.close(lock_fd)
+
+    assert events.read_text() == before, "rotation rewrote the file mid-append"
+    assert not list(tmp_path.glob("events-archive-*.jsonl.gz"))
+
+    # ...and once the lock is free, it does rotate — otherwise the assertion
+    # above would pass for the wrong reason (e.g. nothing was old enough).
+    maintain.rotate_events(tmp_path)
+    assert list(tmp_path.glob("events-archive-*.jsonl.gz")), (
+        "control failed: rotation never archives, so the skip proved nothing"
+    )
