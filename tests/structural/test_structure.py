@@ -17,13 +17,18 @@ class TestStructure(StructuralTests):
     def test_plugin_name(self, plugin_json):
         assert plugin_json["name"] == "tool-time"
 
-    def test_scripts_count(self, project_root):
-        """Expected number of scripts."""
+    def test_scripts_are_the_expected_set(self, project_root):
+        """The shell scripts in scripts/ are exactly the named set."""
         scripts_dir = project_root / "scripts"
-        if not scripts_dir.is_dir():
-            assert False, "Expected scripts/ directory"
-            return
-        scripts = list(scripts_dir.glob("*.sh"))
-        assert len(scripts) == 3, (
-            f"Expected 3 scripts, found {len(scripts)}: {[s.name for s in scripts]}"
+        assert scripts_dir.is_dir(), "Expected scripts/ directory"
+        expected = {
+            "bump-version.sh",
+            "check-versions.sh",
+            "emit-interspect-evidence.sh",
+            "validate-gitleaks-waivers.sh",
+        }
+        found = {s.name for s in scripts_dir.glob("*.sh")}
+        assert found == expected, (
+            f"Scripts changed. missing: {sorted(expected - found)}, "
+            f"unexpected: {sorted(found - expected)}"
         )
